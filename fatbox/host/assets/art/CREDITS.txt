@@ -1,0 +1,11 @@
+Art in the FatBox Host GUI (0.43.1)
+
+Theodor Kittelsen (1857-1914), drawings from the series "Svartedauden" (The Black Death), published 1900.
+
+  pesta.jpg                   "Pesta" (the plague) with her rake: Lab tab backdrop (soft blur), VM wait screen
+  forest.jpg                  forest road with ravens: faint background on the other tabs (Settings > Appearance)
+  ravens.jpg                  detail of a forest road with ravens: empty lists
+
+Public domain: Kittelsen died in 1914, so his work is free of copyright in Norway and the EU (life + 70
+years, expired 1985) and in the United States (published before 1931). The files here are grayscale,
+cropped and resized copies made for FatBox.

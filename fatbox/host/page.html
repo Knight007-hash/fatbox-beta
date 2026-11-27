@@ -1,0 +1,1582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FatBox host</title>
+<link rel="icon" type="image/png" href="/assets/favicon.png">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161920; --line: #262a33; --text: #d7dae0; --muted: #8a909c;
+    --accent: #6ea8fe; --on-accent: #0b0d12; --ok: #5cc28a; --warn: #e6b450; --bad: #e5676b;
+    --sunk: #0b0d11; --hover: #141821; color-scheme: dark;
+  }
+  /* 0.22.0: white mode (the sun/moon button; remembered in this browser) */
+  :root[data-theme="light"] {
+    --bg: #f7f7f5; --panel: #ffffff; --line: #e1e1dc; --text: #1d1f23; --muted: #646973;
+    --accent: #2f6fde; --on-accent: #ffffff; --ok: #1d7f4c; --warn: #9a6200; --bad: #c4363b;
+    --sunk: #fbfbfa; --hover: #f0f0ec; color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .5px; }
+  .grow { flex: 1; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .bar label { color: var(--muted); }
+  input, select, button.b { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
+  input[type=number] { width: 64px; }
+  input:disabled { opacity: .45; }
+  .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+  .net-on { color: var(--warn); } .net-off { color: var(--ok); } .net-manual { color: var(--bad); font-weight: 600; }
+  button.b { cursor: pointer; }
+  button.b:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+  button.b:disabled { opacity: .4; cursor: default; }
+  .err { color: var(--bad); }
+  .muted { color: var(--muted); }
+  .warn { color: var(--warn); }
+  .tabs { display: flex; gap: 2px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+  .tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 10px 14px; font: inherit; cursor: pointer; }
+  .tab:hover:not(:disabled) { color: var(--text); }
+  .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab:disabled { cursor: default; opacity: .45; }
+  .pane[hidden] { display: none; }
+  .note { padding: 8px 20px; border-bottom: 1px solid var(--line); }
+  input:invalid { border-color: var(--bad); }
+  /* 0.22.0: page = header on top, then the tabs (left) and the activity log (right), each scrolling on its own */
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; }
+  .layout { flex: 1; display: flex; min-height: 0; }
+  .content { flex: 1; min-width: 0; overflow: auto; }
+  .side { width: 400px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--sunk); }
+  .side[hidden] { display: none; }
+  .side .tabs { padding: 0 8px 0 12px; align-items: center; }
+  #log { margin: 0; padding: 10px 16px; flex: 1; overflow: auto;
+         font: 12px/1.55 ui-monospace, Consolas, monospace; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  @media (max-width: 1100px) { .side { width: 300px; } }
+  /* header: brand, VM status and every VM button on one line (option B: icon + short word) */
+  header { flex-wrap: wrap; background: var(--panel); padding: 10px 20px; }
+  header h1 { font-size: 15px; letter-spacing: .4px; }
+  /* 0.27.0: the FatBox wordmark, our own drawing in thin runic strokes (F like ᚠ, B like ᛒ); no font, no file */
+  header h1 { display: flex; align-items: center; line-height: 1; }
+  .wordmark { height: 32px; width: auto; display: block; fill: none; stroke: currentColor; stroke-width: 3.4;
+              stroke-linecap: square; stroke-linejoin: miter; }
+  .vsep { width: 1px; height: 22px; background: var(--line); }
+  .vmid { display: inline-flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--ok); } .dot.mid { background: var(--warn); }
+  /* 0.31.0: the VM badge. Steady = settled, pulsing = something is happening, hollow = saved memory */
+  .vmid .dot { color: var(--muted); background: currentColor; }
+  .vmid.t-ok .dot, .vmid.t-ok #vmstate { color: var(--ok); }
+  .vmid.t-warn .dot, .vmid.t-warn #vmstate { color: var(--warn); }
+  .vmid.t-accent .dot, .vmid.t-accent #vmstate { color: var(--accent); }
+  .vmid.t-bad .dot, .vmid.t-bad #vmstate { color: var(--bad); }
+  .vmid.t-muted #vmstate { color: var(--muted); }
+  .vmid.k-saved .dot { background: none; border: 1.5px solid currentColor; }
+  .vmid.pulse .dot { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 25%, transparent); animation: vmpulse 1.4s ease-in-out infinite; }
+  @keyframes vmpulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .vmid.pulse .dot { animation: none; } }
+  svg.i { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  button.ib { display: inline-flex; align-items: center; gap: 6px; height: 30px; white-space: nowrap; }
+  button.ib.only { width: 30px; justify-content: center; padding: 0; }
+  .seg { display: inline-flex; }
+  .seg button.ib { border-radius: 0; margin-left: -1px; }
+  .seg button.ib:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+  .seg button.ib:last-child { border-radius: 0 6px 6px 0; }
+  .seg button.ib:hover:not(:disabled) { position: relative; }
+  button.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 14px;
+                border: 1px solid var(--line); background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  button.chip.net-off { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  button.chip.net-on { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  button.chip.net-manual { color: var(--bad); border-color: var(--bad); font-weight: 600; }
+  button.chip:disabled { opacity: .5; cursor: default; }
+  main { padding: 0 20px 40px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: var(--hover); }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .pill { display: inline-block; min-width: 54px; text-align: center; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .p-high { background: rgba(229,103,107,.15); color: var(--bad); }
+  .p-medium { background: rgba(230,180,80,.15); color: var(--warn); }
+  .p-low { background: rgba(92,194,138,.15); color: var(--ok); }
+  .p-none { color: var(--muted); }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; width: min(960px, 94vw); max-height: 88vh; padding: 0; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog .head { display: flex; gap: 10px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  dialog .body { padding: 14px 16px; overflow: auto; max-height: 76vh; }
+  dialog h3 { font-size: 13px; margin: 16px 0 6px; color: var(--muted); font-weight: 600; }
+  dialog ul { margin: 0; padding-left: 18px; }
+  dialog pre { margin: 0; white-space: pre-wrap; word-break: break-all; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+  /* 0.30.0: report = verdict first, details folded. Every value is still text only (el / textContent) */
+  #dlg { width: min(860px, 94vw); }
+  #dlg .body { padding: 0; }
+  .rhero { display: flex; gap: 22px; padding: 22px 24px 18px; border-bottom: 1px solid var(--line); }
+  .ring { width: 88px; height: 88px; flex: none; position: relative; }
+  .ring svg { width: 88px; height: 88px; display: block; }
+  .ring .track { stroke: var(--line); } .ring .arc { stroke-linecap: round; }
+  .ring .v { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .ring .v b { font-size: 25px; display: block; line-height: 1; }
+  .ring .v span { font-size: 10.5px; letter-spacing: .8px; font-weight: 600; text-transform: uppercase; }
+  .rhero h2 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: .2px; overflow-wrap: anywhere; }
+  .rpill { display: inline-block; font-size: 11px; padding: 1px 9px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); margin-left: 8px; vertical-align: 4px; }
+  .verdict { margin: 8px 0 10px; font-size: 14px; line-height: 1.5; }
+  .rmeta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-size: 12px; }
+  .rsha { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; }
+  button.copy { font: inherit; font-size: 11px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--accent); background: none; cursor: pointer; }
+  button.copy:hover { border-color: var(--accent); }
+  .rsec { padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .rlbl { font-size: 11px; letter-spacing: .7px; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+  .find { display: grid; grid-template-columns: 4px 1fr auto; gap: 12px; align-items: center; padding: 6px 0; }
+  .find .sv { height: 28px; border-radius: 2px; background: var(--muted); }
+  .find .sv.high { background: var(--bad); } .find .sv.mid { background: var(--warn); }
+  .find b { font-weight: 600; } .find .dt { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .find .id { font-size: 11px; color: var(--muted); }
+  .stack { display: flex; height: 8px; border-radius: 4px; overflow: hidden; gap: 2px; margin: 4px 0 10px; background: var(--line); }
+  .leg { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+  .leg i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  #dlg details { border-bottom: 1px solid var(--line); }
+  #dlg summary { display: flex; align-items: center; gap: 10px; padding: 11px 24px; cursor: pointer; list-style: none; }
+  #dlg summary::-webkit-details-marker { display: none; }
+  #dlg summary::before { content: "›"; color: var(--muted); width: 10px; display: inline-block; transition: transform .12s; }
+  #dlg details[open] > summary::before { transform: rotate(90deg); }
+  #dlg details[open] > summary { background: var(--sunk); }
+  #dlg summary b { font-weight: 600; } #dlg summary .c { margin-left: auto; color: var(--muted); font-size: 12px; text-align: right; }
+  #dlg details > .in { padding: 4px 24px 16px; }
+  #dlg details > .in h3:first-child { margin-top: 8px; }
+  .ioc { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; padding: 4px 0; font-size: 12.5px; align-items: center; }
+  .ioc .mono { overflow-wrap: anywhere; }
+  .rnote { color: var(--muted); font-weight: 400; }
+  .kv { display: grid; grid-template-columns: 140px 1fr; gap: 3px 12px; }
+  .kv div:nth-child(odd) { color: var(--muted); }
+  .verbar { display: flex; align-items: center; gap: 12px; padding: 8px 20px; border-bottom: 1px solid var(--line);
+            background: rgba(229,103,107,.12); color: var(--bad); font-weight: 600; }
+  .verbar[hidden] { display: none; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  button.link { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; cursor: pointer; font: inherit; }
+  button.link[hidden], .detail[hidden] { display: none; }
+  .browsebar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 20px; border-bottom: 1px solid var(--line); }
+  .browsebar[hidden], #browsewrap[hidden], #fetchedwrap[hidden], .actbar[hidden] { display: none; }
+  /* 0.33.0: no step bar. The Fetch tab's own label says the step (Browse & pick, Fetching 2 of 3, Triage · 3 ready) */
+  #tab-fetch { position: relative; }
+  .tsub { font-weight: 400; color: var(--muted); margin-left: 6px; font-size: 12px; }
+  .tsub.act { color: var(--accent); }
+  .tspin { display: inline-block; width: 9px; height: 9px; margin-left: 6px; vertical-align: -1px; border-radius: 50%;
+           border: 1.5px solid var(--accent); border-right-color: transparent; animation: tspin .9s linear infinite; }
+  .tspin[hidden], .tprog[hidden] { display: none; }
+  @keyframes tspin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .tspin { animation: none; } }
+  .tprog { position: absolute; left: 0; right: 0; bottom: -2px; height: 2px; background: var(--line); }
+  .tprog i { display: block; height: 2px; width: 0; background: var(--accent); transition: width .4s; }
+  #tab-fetch.busy { border-bottom-color: transparent; }
+  /* 0.33.0: Settings that a fetch uses fold into one "Fetch rules" button; the list opens on mouse over or focus */
+  .rules { position: relative; }
+  .rules > button { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 14px;
+                    border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .rules > button .k { color: var(--muted); }
+  .rules:hover > button, .rules:focus-within > button { border-color: var(--accent); }
+  .rpop { display: none; position: absolute; right: 0; top: 100%; padding-top: 6px; z-index: 20; width: 320px; }
+  .rules:hover .rpop, .rules:focus-within .rpop { display: block; }
+  .rpop .in { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.35); }
+  :root[data-theme="light"] .rpop .in { box-shadow: 0 14px 40px rgba(0,0,0,.12); }
+  .rpop h4 { margin: 0; padding: 10px 16px; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted);
+             border-bottom: 1px solid var(--line); font-weight: 600; }
+  .rpop .r { display: flex; justify-content: space-between; gap: 16px; padding: 7px 16px; font-size: 12.5px; }
+  .rpop .r span:first-child { color: var(--muted); white-space: nowrap; }
+  .rpop .r span:last-child { text-align: right; overflow-wrap: anywhere; }
+  .rpop .r .on { color: var(--warn); font-weight: 600; }
+  .rpop .f { padding: 9px 16px; border-top: 1px solid var(--line); font-size: 12.5px; }
+  #value[hidden] { display: none; }
+  .actbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel); }
+  #fetchedwrap { padding: 0 20px 4px; }
+  #ddbox { display: contents; }
+  .dd { position: relative; display: inline-block; }
+  .dd > button { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px; font: inherit; cursor: pointer; }
+  .dd > button b { color: var(--accent); font-weight: 600; margin-left: 4px; }
+  .dd > button::after { content: "▾"; margin-left: 6px; color: var(--muted); }
+  .dd.open > button, .dd > button:hover { border-color: var(--accent); }
+  .menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 5; min-width: 220px; max-width: 300px; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 8px; padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .menu[hidden] { display: none; }
+  .menu input[type=search] { width: 100%; margin-bottom: 4px; }
+  .menu .opts { max-height: 260px; overflow: auto; }
+  .menu label { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+  .menu label:hover { background: var(--hover); }
+  .menu label .c { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .menu .none { padding: 6px; color: var(--muted); }
+  #browsewrap { padding: 0 20px 12px; max-height: 420px; overflow: auto; }
+  #browsewrap th.sort { cursor: pointer; } #browsewrap th.sort:hover { color: var(--text); }
+  #browsewrap tr.off td { opacity: .45; } #browsewrap tr.off { cursor: default; }
+  #libtable th.sort { cursor: pointer; } #libtable th.sort:hover { color: var(--text); }
+  .warnbar { padding: 8px 20px; border-bottom: 1px solid var(--line); background: rgba(230,180,80,.12); color: var(--warn); font-weight: 600; }
+  .warnbar[hidden] { display: none; }
+  #snaptable tbody tr { cursor: default; }
+  .ok { color: var(--ok); }
+  td .b { padding: 2px 8px; font-size: 12px; }
+  /* 0.23.0: Settings tab (opened from the gear at the right end of the tab row) */
+  .tab.gear { display: inline-flex; align-items: center; gap: 6px; }
+  .setwrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; padding: 16px 20px 8px; align-items: start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; }
+  .card h3 { margin: 0; padding: 10px 16px; font-size: 11.5px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted);
+             font-weight: 600; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+  .srow { display: grid; grid-template-columns: minmax(150px, 210px) 1fr; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); align-items: center; }
+  .srow:last-child { border-bottom: 0; }
+  .srow .l { font-weight: 600; } .srow .d { color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 2px; }
+  .ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ctl input[type=text] { width: 100%; max-width: 320px; }
+  .lockb { font-size: 10.5px; padding: 1px 8px; border-radius: 9px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+           color: var(--warn); text-transform: none; letter-spacing: 0; font-weight: 600; }
+  .chk { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; cursor: pointer; }
+  .chk:has(input:checked) { border-color: var(--accent); color: var(--accent); }
+  .chk input { margin: 0; }
+  button.link.lnk { color: var(--accent); text-decoration: none; }
+  .segc { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .segc button { background: none; border: 0; border-right: 1px solid var(--line); color: var(--muted); padding: 5px 14px; font: inherit; cursor: pointer; }
+  .segc button:last-child { border-right: 0; }
+  .segc button.on { background: color-mix(in srgb, var(--accent) 16%, var(--bg)); color: var(--text); font-weight: 600; }
+  /* 0.41.0 (T-24): Lab tab, the home screen. Names and states come from VirtualBox via the host, shown as text */
+  .labhome { padding-top: 18px; max-width: 1100px; }
+  .cap { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 6px 0 10px; }
+  .cap .muted { text-transform: none; letter-spacing: 0; }
+  .labmap { display: flex; align-items: center; gap: 22px; margin: 4px 0 24px; flex-wrap: wrap; }
+  .lnode { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 12px 14px; min-width: 190px; display: flex; flex-direction: column; gap: 2px; text-align: left; color: var(--text); font: inherit; }
+  .lnode.act { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .lnode.add { border-style: dashed; color: var(--muted); cursor: pointer; align-items: center; justify-content: center; }
+  .lnode.add:hover { color: var(--text); border-color: var(--accent); }
+  .lwire { width: 34px; border-top: 1px dashed var(--muted); }
+  .lvms { display: flex; flex-direction: column; gap: 10px; }
+  .ldot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .ldot.ok { background: var(--ok); } .ldot.warn { background: var(--warn); } .ldot.bad { background: var(--bad); } .ldot.accent { background: var(--accent); }
+  .lpill { font-size: 11px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
+  .lmeter { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 2px 0 6px; max-width: 640px; }
+  .lmeter i { display: block; height: 100%; background: var(--accent); }
+  #lram { margin-bottom: 22px; }
+  #labtable { margin-top: 4px; }
+  #labtable td .b { margin-right: 6px; }
+  .ladd { margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); max-width: 760px; }
+  /* 0.43.0: art, Theodor Kittelsen, Svartedauden (1900), public domain (assets/art/CREDITS.txt). Served by the
+     host like the favicon, so the CSP stays img-src 'self'. Art only where there is no data, except the faint
+     forest (B), which Settings → Appearance turns off. Pure decoration: pointer-events off, no text in it */
+  :root { --art-ink: 15,17,21; --art-op: .62; --art-filter: grayscale(1) contrast(1.15) brightness(.8); --amb-op: .1; --amb-blend: normal; --bd-op: .75; }
+  :root[data-theme="light"] { --art-ink: 247,247,245; --art-op: .6; --art-filter: grayscale(1) contrast(1.1); --amb-op: .08; --amb-blend: multiply; --bd-op: .55; }
+  /* 0.43.1: the Lab tab sits on Pesta, softly blurred, darkening toward the table so every row stays readable */
+  .content:has(#pane-lab:not([hidden])) { display: flex; flex-direction: column; }
+  #pane-lab { position: relative; flex: 1 0 auto; }
+  #pane-lab > main { position: relative; z-index: 1; }
+  .labbd { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+  .labbd i { position: absolute; inset: -20px; background: url(/assets/art/pesta.jpg) 3% 70% / 150% auto no-repeat;
+             filter: var(--art-filter) blur(3px); opacity: var(--bd-op); }
+  .labbd::after { content: ""; position: absolute; inset: 0;
+                  background: linear-gradient(180deg, rgba(var(--art-ink),.15) 0, rgba(var(--art-ink),.55) 45%, rgba(var(--art-ink),.92) 80%),
+                              linear-gradient(90deg, rgba(var(--art-ink),.7), transparent 45%); }
+  .layout.amb:has(#pane-lab:not([hidden]))::before { opacity: 0; }  /* one drawing at a time */
+  .hero { position: relative; height: 210px; margin: -18px 0 22px; }
+  .hero .htxt { position: absolute; left: 0; bottom: 26px; max-width: 460px; z-index: 1; }
+  .hero .hk { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+  .hero h2 { margin: 6px 0 6px; font-size: 26px; line-height: 1.15; font-weight: 600; color: var(--text); }
+  .hero .hs { color: var(--muted); }
+  #wait { position: absolute; inset: 0; z-index: 5; background: var(--bg); display: flex; align-items: center; padding-left: 9%; }
+  #wait[hidden] { display: none; }
+  #wait .art { position: absolute; inset: 0; background: url(/assets/art/pesta.jpg) 70% 58% / cover no-repeat; filter: var(--art-filter);
+               opacity: calc(var(--art-op) * .7); pointer-events: none;
+               -webkit-mask-image: radial-gradient(70% 80% at 62% 55%, #000 30%, transparent 85%); mask-image: radial-gradient(70% 80% at 62% 55%, #000 30%, transparent 85%); }
+  #wait .wc { position: relative; text-align: center; padding: 26px 34px; background: rgba(var(--art-ink),.78); border: 1px solid var(--line); border-radius: 10px; }
+  #wait .hk { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+  #wait h2 { margin: 8px 0 6px; font-size: 22px; font-weight: 600; }
+  #wait .wbar { width: 260px; height: 3px; background: var(--line); border-radius: 2px; margin: 16px auto 12px; overflow: hidden; }
+  #wait .wbar i { display: block; width: 30%; height: 100%; background: var(--accent); animation: wslide 1.8s ease-in-out infinite; }
+  @keyframes wslide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+  @media (prefers-reduced-motion: reduce) { #wait .wbar i { animation: none; width: 100%; opacity: .5; } }
+  .empty.art::before { content: ""; display: block; width: 280px; height: 220px; margin: 0 auto 14px; pointer-events: none;
+                       background: url(/assets/art/ravens.jpg) center / cover; filter: var(--art-filter); opacity: calc(var(--art-op) * .85);
+                       -webkit-mask-image: radial-gradient(closest-side, #000 55%, transparent); mask-image: radial-gradient(closest-side, #000 55%, transparent); }
+  .layout { position: relative; }
+  .content { position: relative; z-index: 1; }
+  .layout.amb::before { content: ""; position: absolute; left: 0; top: 46px; bottom: 0; right: 400px; pointer-events: none; z-index: 0;
+                        background: url(/assets/art/forest.jpg) 70% 70% / cover no-repeat; filter: var(--art-filter); opacity: var(--amb-op); mix-blend-mode: var(--amb-blend);
+                        -webkit-mask-image: radial-gradient(90% 95% at 85% 100%, #000 30%, transparent 80%); mask-image: radial-gradient(90% 95% at 85% 100%, #000 30%, transparent 80%); }
+  .layout.amb:has(.side[hidden])::before { right: 0; }
+  .layout.amb:has(.pane:not([hidden]) .empty.art:not(:empty))::before { opacity: 0; }  /* one drawing at a time */
+  @media (max-width: 1100px) { .layout.amb::before { right: 300px; } }
+ Pictures are inline SVG, text only from FatBox itself */
+  .labwrap { padding: 16px 20px 0; }
+  .labcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; padding: 14px 16px; }
+  .labcard { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; text-align: left;
+             color: var(--text); font: inherit; }
+  .labcard:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+  .labcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .labcard[disabled] { opacity: .45; cursor: not-allowed; }
+  .labcard b { display: block; margin: 8px 0 2px; } .labcard .d { color: var(--muted); font-size: 12px; }
+  .labcard svg { width: 100%; height: 74px; }
+  .labcard svg .pc { fill: none; stroke: var(--muted); } .labcard svg .gui { fill: color-mix(in srgb, var(--ok) 18%, transparent); stroke: var(--ok); }
+  .labcard svg .vmb { fill: color-mix(in srgb, var(--accent) 16%, transparent); stroke: var(--accent); }
+  .labcard svg .wire { stroke: var(--muted); stroke-dasharray: 3 3; } .labcard svg text { fill: var(--text); font-size: 9.5px; }
+  .labchecks { list-style: none; margin: 0; padding: 0; } .labchecks li { padding: 3px 0; }
+  .labchecks .ok { color: var(--ok); } .labchecks .warn { color: var(--warn); } .labchecks .bad { color: var(--bad); }
+  #labpub { width: 100%; font-size: 11.5px; min-height: 54px; resize: vertical; }
+  #lablabel { font-size: 12px; } #lablabel.bad { color: var(--bad); font-weight: 600; }
+  #libtable:not(.lib) .libcol { display: none; }   /* New: no dates */
+  .cnt { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px; background: var(--line); font-size: 11px; color: var(--text); font-weight: 400; }
+  #libsearch { width: 260px; }
+  .setfoot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 20px 24px; }
+  .detail { margin: 0; padding: 8px 20px; border-bottom: 1px solid var(--line); background: var(--sunk); color: var(--muted);
+            font: 12px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></symbol>
+  <symbol id="i-win" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/></symbol>
+  <symbol id="i-pwr" viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+  <symbol id="i-net" viewBox="0 0 24 24"><path d="M9 7V3M15 7V3"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v4"/></symbol>
+  <symbol id="i-upd" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></symbol>
+  <symbol id="i-rev" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v5h5"/></symbol>
+  <symbol id="i-cam" viewBox="0 0 24 24"><path d="M4 8h3l2-2.5h6L17 8h3v11H4z"/><circle cx="12" cy="13.5" r="3.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-quit" viewBox="0 0 24 24"><path d="M15 4h4v16h-4"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h10"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 8v6l-4-2v-4z"/></symbol>
+  <symbol id="i-side" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+</defs></svg>
+<header>
+  <h1 aria-label="FatBox" title="FatBox"><svg class="wordmark" viewBox="-4 -10 128 64" aria-hidden="true">
+    <path d="M3,-6 L3,50 M3,5 L19,-4 M3,17 L16,9"/><path d="M24,40 L31,15 L38,40 M27,31 L36,28"/>
+    <path d="M46,6 L46,47 M41,17 L53,15"/><path d="M61,-6 L61,50 M61,1 L75,10 L61,20 L77,30 L61,41"/>
+    <path d="M90,15 L98,28 L90,41 L82,28 Z"/><path d="M102,14 L119,46 M118,13 L102,42"/></svg></h1>
+  <span class="vsep"></span>
+  <span class="vmid" id="vmid"><span class="dot" id="vmdot"></span><span id="vmname"></span> <span id="vmstate"></span></span>
+  <button class="link" id="lablabel" title="Lab layout: where the test VM runs. Click to open Settings"></button>
+  <span class="grow"></span>
+  <span id="msg" class="err"></span>
+  <button class="link" id="msgmore" hidden>details</button>
+  <span id="vmbusy" class="muted"></span>
+  <span class="seg">
+    <button class="b ib" id="vm-start" title="Start the VM in the background (no window)"><svg class="i"><use href="#i-play"/></svg>Start</button>
+    <button class="b ib only" id="vm-startgui" title="Start the VM with its window"><svg class="i"><use href="#i-win"/></svg></button>
+    <button class="b ib" id="vm-shutdown" title="Ask Windows in the VM to shut down"><svg class="i"><use href="#i-pwr"/></svg>Shut down</button>
+    <button class="b ib" id="vm-poweroff" title="Pull the plug (asks first)"><svg class="i"><use href="#i-stop"/></svg>Power off</button>
+  </span>
+  <button class="chip net-off" id="vm-net" title="The VM's internet (virtual cable). Click to connect or disconnect by hand"><svg class="i"><use href="#i-net"/></svg><span id="netstate">Network</span></button>
+  <span class="vsep"></span>
+  <span class="seg">
+    <button class="b ib" id="vm-revert" title="Go back to the ★ default snapshot (asks first). Pick another one in the Snapshots tab"><svg class="i"><use href="#i-rev"/></svg>Revert</button>
+    <button class="b ib" id="vm-take" title="Take a snapshot now (only while the VM is off)"><svg class="i"><use href="#i-cam"/></svg>Snapshot</button>
+  </span>
+  <span class="vsep"></span>
+  <button class="b ib only" id="theme" title="White mode"><svg class="i"><use id="theme-icon" href="#i-sun"/></svg></button>
+  <button class="b ib only" id="quit" title="Quit: stop the FatBox host (the VM keeps running)"><svg class="i"><use href="#i-quit"/></svg></button>
+</header>
+<pre class="detail" id="msgdetail" hidden></pre>
+<div class="verbar" id="verbar" hidden><span id="vermsg"></span><button class="b" id="ver-update">Update VM</button></div>
+<div class="layout" id="layout">
+<div class="content" id="content">
+<div id="wait" hidden><div class="art"></div><div class="wc"><div class="hk">Starting test VM</div><h2 id="waitname">Waiting for Windows</h2><div class="muted" id="waittext">The VM is on; Windows is still starting</div><div class="wbar"><i></i></div><button class="b" id="waithide" title="Hide this screen until the next start">Hide</button></div></div>
+<nav class="tabs" role="tablist">
+  <button class="tab on" id="tab-lab" role="tab" aria-selected="true" title="Your lab: this PC and its test VMs">Lab</button>
+  <button class="tab" id="tab-fetch" role="tab" aria-selected="false">Fetch<span class="tsub" id="fetchstep"></span><span class="tspin" id="fetchspin" hidden></span><span class="tprog" id="fetchprog" hidden><i></i></span></button>
+  <button class="tab" id="tab-static" role="tab" aria-selected="false">Triage &amp; Static Analysis</button>
+  <button class="tab" id="tab-snaps" role="tab" aria-selected="false">Snapshots</button>
+  <button class="tab" id="tab-dynamic" role="tab" aria-selected="false" disabled title="Comes later (roadmap T-12)">Dynamic Analysis · later</button>
+  <span class="grow"></span>
+  <button class="tab gear" id="tab-settings" role="tab" aria-selected="false" title="Settings: fetch defaults, filters, analysis, big files"><svg class="i"><use href="#i-gear"/></svg>Settings</button>
+  <button class="tab" id="logshow" hidden title="Show the activity log">Activity log</button>
+</nav>
+<section class="pane" id="pane-lab" role="tabpanel">
+<div class="labbd" aria-hidden="true"><i></i></div>
+<main class="labhome">
+  <div class="hero"><div class="htxt"><div class="hk">FatBox · static malware lab</div><h2>Your lab</h2><div class="hs" id="lablayout"></div></div></div>
+  <div class="labmap">
+    <div class="lnode" id="lhost"><b id="lhostname">This PC</b><span class="muted" id="lhostram"></span></div>
+    <div class="lwire"></div>
+    <div class="lvms" id="lvms"></div>
+  </div>
+  <div id="lram" hidden>
+    <div class="cap">Memory on this PC <span class="muted" id="lramtotal"></span></div>
+    <div class="lmeter"><i id="lmused"></i></div>
+    <div class="muted" id="lramtext"></div>
+  </div>
+  <table id="labtable">
+    <thead><tr><th>Active</th><th>Test VM</th><th>State</th><th>Size</th><th>Clean snapshot</th><th></th></tr></thead>
+    <tbody id="labrows"></tbody>
+  </table>
+  <div class="ladd" id="laddnote" hidden>The <b>Add test VM</b> wizard comes in the next update. Until then, a new test VM is set up with
+    <span class="mono">scripts\setup-host.ps1</span> on this PC (one double-click inside the VM).</div>
+</main>
+</section>
+<section class="pane" id="pane-fetch" role="tabpanel" hidden>
+<div class="bar">
+  <label>Mode</label>
+  <select id="mode">
+    <option value="recent">recent (last 60 min)</option>
+    <option value="latest">latest 100</option>
+    <option value="tag">tag</option>
+    <option value="signature">signature (family)</option>
+    <option value="file_type">file type</option>
+  </select>
+  <input id="value" placeholder="value (e.g. AgentTesla)" maxlength="64">
+  <label>List</label><select id="limit" title="How many rows Browse lists, newest first"><option value="25">25 rows</option><option value="50">50 rows</option><option value="100" selected>100 rows</option></select>
+  <button class="b primary" id="browse" title="List what MalwareBazaar has for this mode (metadata only, no files). Network ON for a few seconds">Browse</button>
+  <button class="b" id="cancel" disabled>Cancel</button>
+  <span id="jobstate" class="muted"></span>
+  <span class="grow"></span>
+  <div class="rules" id="rules"><button id="rulesbtn" aria-describedby="rulespop" title="Click to open Settings"><svg class="i"><use href="#i-filter"/></svg>Fetch rules<span class="k" id="rulessum"></span></button>
+    <div class="rpop" id="rulespop" role="tooltip"><div class="in"><h4>Fetch rules (from Settings)</h4><div id="rulesrows"></div>
+      <div class="f"><button class="link lnk" id="tosettings">Change in Settings →</button></div></div></div></div>
+</div>
+<div class="browsebar" id="browsefilters" hidden>
+  <span class="muted">Show:</span><span id="ddbox"></span>
+  <button class="link lnk" id="clearshow">Clear</button>
+</div>
+<div id="browsewrap" hidden>
+  <table>
+    <thead><tr><th></th><th class="sort" data-k="prescore">Pre-score</th><th class="sort" data-k="signature">Family</th>
+      <th class="sort" data-k="cat">Category</th><th class="sort" data-k="file_type">Type</th><th class="sort" data-k="file_size">Size</th>
+      <th>Tags</th><th class="sort" data-k="first_seen">First seen (UTC)</th><th>SHA-256</th></tr></thead>
+    <tbody id="brows"></tbody>
+  </table>
+</div>
+<div class="actbar" id="pickbar" hidden>
+  <span id="picksum"></span><span id="pickinfo" class="muted"></span><span class="grow"></span>
+  <button class="b primary" id="fetchpicked" disabled title="Download exactly the ticked samples (network ON, then OFF). Nothing is analysed yet">Fetch selected (0)</button>
+</div>
+<div id="fetchedwrap" hidden>
+  <table>
+    <thead><tr><th>Family</th><th>Type</th><th>Size</th><th>Fetch</th><th>SHA-256</th></tr></thead>
+    <tbody id="frows"></tbody>
+  </table>
+</div>
+<div class="actbar" id="triagebar" hidden>
+  <span id="triagesum" class="muted"></span><span class="grow"></span>
+  <button class="b" id="backbrowse">Back to Browse</button>
+  <button class="b primary" id="triagebtn" disabled title="Static analysis in the VM, offline. The samples are never run">Triage in VM</button>
+</div>
+</section>
+<section class="pane" id="pane-static" role="tabpanel" hidden>
+<div class="bar">
+  <span class="segc" role="tablist"><button id="view-new" class="on" title="Reports waiting for you to Save or Discard them">New<span class="cnt" id="cnt-new">0</span></button><button id="view-lib" title="Reports you saved on this PC, kept across reverts">Library<span class="cnt" id="cnt-lib">0</span></button></span>
+  <input id="libsearch" type="search" placeholder="Search family, tag, type, sha256…" maxlength="80" hidden>
+  <button class="b" id="selall" title="Tick every report that is not saved yet">Select all</button>
+  <button class="b primary" id="libsave" disabled title="Keep the ticked reports: they show in Library from now on">Save to library (0)</button>
+  <button class="b" id="libdiscard" disabled title="Drop the ticked reports: they won't be copied again">Discard (0)</button>
+  <span id="libsum" class="muted"></span>
+  <span class="grow"></span>
+  <button class="b" id="refresh" title="Copy new reports from the VM into the library (if it's running), then show the library">Refresh</button>
+  <button class="b" id="libdel" disabled hidden title="Only for samples no longer in the VM">Delete from library (0)</button>
+</div>
+<main>
+  <table id="libtable">
+    <thead><tr><th></th><th class="sort" data-k="prio">Priority</th><th class="sort" data-k="score">Score</th><th>SHA-256</th>
+      <th class="sort" data-k="signature">Family</th><th class="sort" data-k="file_type">Type</th><th class="sort" data-k="file_badge">File</th><th class="sort" data-k="code_badge">Code</th><th class="sort" data-k="status">Status</th>
+      <th class="sort" data-k="in_vm">In VM</th><th class="sort libcol" data-k="fetched_at">Fetched (UTC)</th><th class="sort libcol" data-k="analyzed_at">Analyzed (UTC)</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" class="empty">Loading the library...</div>
+</main>
+</section>
+<section class="pane" id="pane-snaps" role="tabpanel" hidden>
+<div class="warnbar" id="snapwarn" hidden></div>
+<div class="bar">
+  <button class="b primary" id="makeclean" title="Copy reports, empty the VM, check it, shut it down, take the snapshot and make it the default, then start from it">Make clean snapshot</button>
+  <span class="muted">★ = where Revert and auto-revert go back to. ✓ = FatBox checked it: same version, 0 samples, network off, shut down cleanly.</span>
+</div>
+<main>
+  <table id="snaptable">
+    <thead><tr><th></th><th>Name</th><th>Clean check</th><th>FatBox</th><th>Taken (UTC)</th><th></th></tr></thead>
+    <tbody id="snaprows"></tbody>
+  </table>
+  <div id="snapempty" class="empty">Loading snapshots...</div>
+</main>
+</section>
+<section class="pane" id="pane-settings" role="tabpanel" hidden>
+<div class="labwrap"><div class="card" id="labcard"><h3>Lab layout <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">where the test VM runs</span></h3>
+ <div class="labcards" id="labcards">
+  <button class="labcard" data-layout="one-pc"><svg viewBox="0 0 200 74"><rect class="pc" x="4" y="4" width="192" height="66" rx="6"/><text x="12" y="17">This PC</text><rect class="gui" x="16" y="26" width="70" height="34" rx="5"/><text x="38" y="46">GUI</text><rect class="vmb" x="112" y="26" width="72" height="34" rx="5"/><text x="126" y="46">Test VM</text></svg>
+   <b>One PC</b><span class="d">GUI and test VM on this computer.</span></button>
+  <button class="labcard" data-layout="two-pcs"><svg viewBox="0 0 200 74"><rect class="pc" x="2" y="12" width="80" height="58" rx="6"/><text x="10" y="25">This PC</text><rect class="gui" x="12" y="32" width="60" height="30" rx="5"/><text x="30" y="51">GUI</text><line class="wire" x1="82" y1="46" x2="112" y2="46"/><rect class="pc" x="112" y="4" width="86" height="66" rx="6"/><text x="120" y="17">Test PC</text><rect class="vmb" x="122" y="28" width="66" height="34" rx="5"/><text x="132" y="49">Test VM</text></svg>
+   <b>Two PCs</b><span class="d">GUI here, test VM in VirtualBox on another PC.</span></button>
+  <button class="labcard" data-layout="two-vms"><svg viewBox="0 0 200 74"><rect class="pc" x="4" y="4" width="192" height="66" rx="6"/><text x="12" y="17">One PC (VirtualBox)</text><rect class="gui" x="16" y="26" width="76" height="34" rx="5"/><text x="24" y="46">GUI in a VM</text><line class="wire" x1="92" y1="43" x2="112" y2="43"/><rect class="vmb" x="112" y="26" width="72" height="34" rx="5"/><text x="126" y="46">Test VM</text></svg>
+   <b>Two VMs</b><span class="d">GUI in a VM, test VM beside it (same PC), or GUI in a VM on another PC.</span></button>
+  <button class="labcard" disabled title="Later (ROADMAP T-20): needs a way to wipe the PC after every run"><svg viewBox="0 0 200 74"><rect class="pc" x="2" y="12" width="80" height="58" rx="6"/><text x="10" y="25">This PC</text><rect class="gui" x="12" y="32" width="60" height="30" rx="5"/><text x="30" y="51">GUI</text><line class="wire" x1="82" y1="46" x2="112" y2="46"/><rect class="pc" x="112" y="4" width="86" height="66" rx="6" style="stroke:var(--bad)"/><text x="120" y="17">Test PC</text><text x="122" y="47">no VM</text></svg>
+   <b>Test PC without a VM</b><span class="d">Later: no snapshot means no clean revert.</span></button>
+ </div>
+ <div id="labremote">
+  <div class="srow"><div class="l">Test PC<div class="d">The computer whose VirtualBox holds the test VM</div></div><div class="ctl"><input id="lab-addr" type="text" maxlength="253" placeholder="address, e.g. 10.99.0.2" style="max-width:200px"><input id="lab-login" type="text" maxlength="64" placeholder="Windows user there" style="max-width:180px"><input id="lab-port" type="number" min="1" max="65535" style="width:80px"></div></div>
+  <div class="srow"><div class="l">This PC's key<div class="d">Only lets FatBox run its VirtualBox commands there</div></div><div class="ctl" style="display:block"><button class="b" id="lab-pair">Make key</button>
+   <div id="labpubwrap" hidden><p class="muted" style="margin:8px 0 4px">On the test PC, in PowerShell "Run as administrator", in the folder with <span class="mono">lab-setup.ps1</span> and <span class="mono">fatbox_gate.py</span> (from this PC's <span class="mono">scripts\lab</span>), run this with this PC's IP:</p>
+   <textarea id="labpub" class="mono" readonly></textarea></div></div></div>
+ </div>
+ <div class="srow"><div class="l">No test VM yet?<div class="d">Any layout: the test VM is a VirtualBox VM</div></div><div class="d muted">One PC: run <span class="mono">scripts\setup-host.ps1</span> on this PC with a fresh Windows VM (one double-click inside it). Or build one from a Windows ISO with <span class="mono">scripts\lab\new-test-vm.ps1</span>, or prepare your own fresh Windows VM with <span class="mono">provision-vm.ps1</span> (inside it) and <span class="mono">lock-vm.ps1</span>. Run them on the PC that holds the VM; steps in HOST.md, "Fresh test VM". Then Snapshots → Make clean snapshot.</div></div>
+ <div class="srow"><div class="l">Check<div class="d" id="lab-pinned"></div></div><div class="ctl" style="display:block"><ul class="labchecks" id="labchecks"></ul></div></div>
+ <div class="setfoot" style="border-top:1px solid var(--line)"><span class="muted">Saved on this PC (lab.json). A failed VirtualBox or test PC check blocks Fetch, Triage and Update VM; an old FatBox in the VM only warns.</span><span class="grow"></span><span id="labmsg" class="muted"></span>
+  <button class="b" id="lab-forget" title="Only after reinstalling the test PC: its new SSH key gets pinned on the next check">Forget test PC key</button>
+  <button class="b" id="lab-check">Test connection</button><button class="b primary" id="lab-save">Save layout</button></div>
+</div></div>
+<div class="labwrap"><div class="card"><h3>Appearance</h3>
+ <div class="srow"><div class="l">Forest background<div class="d">A faint Kittelsen drawing behind the tabs. Saved in this browser</div></div><div class="ctl"><label><input id="ambient" type="checkbox"> show</label></div></div>
+</div></div>
+<div class="setwrap">
+<div>
+ <div class="card"><h3>Fetch defaults</h3>
+  <div class="srow"><div class="l">Download limit<div class="d">Skip downloads bigger than this (slow link)</div></div><div class="ctl"><label><input id="s-limiton" type="checkbox"> on</label><input id="s-maxmb" type="number" min="1" max="100" step="1" required><span class="muted">MB, 1 – 100</span></div></div>
+  <div class="srow"><div class="l">Time budget<div class="d">One budget for the whole fetch</div></div><div class="ctl"><input id="s-budget" type="number" min="60" max="1800" step="1" required><span class="muted">s, 60 – 1800</span></div></div>
+  <div class="srow"><div class="l">Auto-revert after triage<div class="d">Only when every report is saved in the library. Saved at once</div></div><div class="ctl"><label><input id="autorevert" type="checkbox"> go back to the default snapshot</label><span id="autoname" class="muted mono"></span></div></div>
+ </div>
+ <div class="card"><h3>Filters</h3>
+  <div class="srow"><div class="l">File types<div class="d">Checked on the real bytes too. Office = doc, xls, ppt and msi</div></div><div class="ctl" id="s-types">
+   <label class="chk"><input type="checkbox" value="exe"> exe</label><label class="chk"><input type="checkbox" value="dll"> dll</label>
+   <label class="chk"><input type="checkbox" value="office"> office / msi</label><label class="chk"><input type="checkbox" value="lnk"> lnk</label>
+   <label class="chk"><input type="checkbox" value="elf"> elf</label><label class="chk"><input type="checkbox" value="pdf"> pdf</label>
+   <label class="chk"><input type="checkbox" value="ps1"> ps1</label></div></div>
+  <div class="srow"><div class="l">Only these tags<div class="d">Comma list. Empty = any</div></div><div class="ctl"><input id="s-tags" type="text" maxlength="900" placeholder="e.g. ransomware, stealer"></div></div>
+  <div class="srow"><div class="l">Never these families<div class="d">Comma list. Skip noisy repeats</div></div><div class="ctl"><input id="s-skipfam" type="text" maxlength="900" placeholder="e.g. Mirai, Gafgyt"></div></div>
+  <div class="srow"><div class="l">Smallest file<div class="d">Skip tiny scripts and stubs</div></div><div class="ctl"><input id="s-minkb" type="number" min="0" max="10240" step="1" required><span class="muted">KB, 0 = no minimum</span></div></div>
+  <div class="srow"><div class="l"></div><div class="d muted">Browse lists only samples that pass these filters and the download and unpack limits. The Show menus on the Fetch tab then narrow that list.</div></div>
+ </div>
+</div>
+<div>
+ <div class="card"><h3>Analysis</h3>
+  <div class="srow"><div class="l">Time per sample<div class="d">Past it the analysis is stopped</div></div><div class="ctl"><input id="s-sample" type="number" min="10" max="300" step="1" required><span class="muted">s, 10 – 300</span></div></div>
+  <div class="srow"><div class="l">Extra time for capa</div><div class="ctl"><input id="s-capa" type="number" min="30" max="600" step="1" required><span class="muted">s, 30 – 600</span></div></div>
+  <div class="srow"><div class="l">Samples at once<div class="d">Auto = one per VM CPU, as far as free RAM allows. More than the VM's CPUs is allowed but not faster: they share the CPUs and get more time each.</div></div><div class="ctl"><select id="s-par"><option value="0">Auto</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></div></div>
+  <div class="srow"><div class="l">capa on packed programs<div class="d">Packed = capa only sees the unpacker</div></div><div class="ctl"><select id="s-capapacked"><option value="skip">Skip</option><option value="run">Run anyway</option></select></div></div>
+ </div>
+ <div class="card"><h3>Files over the unpack limit <span class="lockb">🔒 safety limit</span></h3>
+  <div class="srow"><div class="l">Unpack limit<div class="d">Zip-bomb guard (SPEC). Can go lower, never off</div></div><div class="ctl"><select id="s-cap"><option value="25">25 MB</option><option value="50">50 MB</option><option value="100">100 MB</option></select></div></div>
+  <div class="srow"><div class="l">When a sample is bigger<div class="d">The file itself is never kept</div></div><div class="ctl"><select id="s-toobig"><option value="skip">Skip</option><option value="info">Keep its info only</option></select></div></div>
+  <div class="srow"><div class="l"></div><div class="d muted">"Keep its info only" adds a library row with hash, family, type and tags, marked <b>too big · not analysed</b>.</div></div>
+ </div>
+ <div class="card"><h3>FatBox in the VM</h3>
+  <div class="srow"><div class="l">Update<div class="d">Pulls the latest FatBox from GitHub. Network ON only while it runs</div></div><div class="ctl"><button class="b ib" id="vm-update"><svg class="i"><use href="#i-upd"/></svg>Update VM</button><span class="muted">host and VM must run the same version</span></div></div>
+ </div>
+ <div class="card"><h3>Sources &amp; keys</h3>
+  <div class="srow"><div class="l">API keys</div><div class="d muted">Keys live only in the VM (MB_API_KEY, config.toml) and are never shown or typed here. To check them, in the VM run <span class="mono">python -m fatbox sources</span>.</div></div>
+ </div>
+</div>
+</div>
+<div class="setfoot"><span class="muted">Saved on this PC (settings.json), sent to the VM with each fetch. The VM checks every value again.</span>
+  <span class="grow"></span><span id="setmsg" class="muted"></span><button class="b" id="s-reset">Reset to defaults</button><button class="b primary" id="s-save">Save</button></div>
+</section>
+</div>
+<aside class="side" id="side">
+  <nav class="tabs"><span class="tab on">Activity log</span><span class="grow"></span>
+    <button class="b ib only" id="loghide" title="Hide the activity log"><svg class="i"><use href="#i-side"/></svg></button></nav>
+  <pre id="log"></pre>
+</aside>
+</div>
+<dialog id="dlg">
+  <div class="head"><b>Report</b><span id="dsha" class="mono muted"></span><span class="grow"></span>
+    <button class="b" id="dreload">Re-fetch from VM</button><button class="b" id="dclose">Close</button></div>
+  <div class="body" id="dbody"></div>
+</dialog>
+<script>
+"use strict";
+// Everything below renders VM-supplied data with textContent only. Never innerHTML.
+const $ = id => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = String(text); if (cls) e.className = cls; return e; };
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", "X-FatBox": "1" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json();
+  if (!r.ok) { const e = new Error(j.error || r.status); e.detail = j.detail || ""; e.unsaved = !!j.unsaved; throw e; }
+  return j;
+}
+// Short words on top; VirtualBox's raw error text only when "details" is clicked.
+function say(t, detail) {
+  $("msg").textContent = t || "";
+  $("msgdetail").textContent = detail || "";
+  $("msgdetail").hidden = true;
+  $("msgmore").hidden = !detail;
+  $("msgmore").textContent = "details";
+}
+$("msgmore").onclick = () => {
+  $("msgdetail").hidden = !$("msgdetail").hidden;
+  $("msgmore").textContent = $("msgdetail").hidden ? "details" : "hide details";
+};
+
+let vmTimer = null, vmInfo = null, vmBusy = false, vmFails = 0, fetchRunning = false, verOk = null;
+const OFF = ["poweroff", "aborted", "saved", "abortedsaved", "aborted-saved"];
+const HUNG = ["paused", "stuck", "gurumeditation", "stopping", "starting"];  // same as server.py HUNG
+const VM_BTNS = ["vm-start", "vm-startgui", "vm-shutdown", "vm-poweroff", "vm-revert", "vm-take", "vm-net", "vm-update"];
+
+// Network badge: ON is normal only while a job runs; ON with nothing running means someone turned it on by hand.
+function netBadge() {
+  const j = vmInfo; if (!j) return;
+  const on = j.cable === "on";
+  $("netstate").textContent = !on ? "Network off" : fetchRunning ? "Network ON (job)" : "Network ON (manual)";
+  $("vm-net").className = "chip " + (!on ? "net-off" : fetchRunning ? "net-on" : "net-manual");
+  $("vm-net").title = on ? "The VM is online. Click to disconnect" : "The VM is offline. Click to connect by hand (asks first)";
+}
+
+// Buttons follow the VM state; everything is locked while an action runs (server enforces the same).
+function vmButtons() {
+  const j = vmInfo;
+  if (!j || vmBusy || j.action) {
+    VM_BTNS.forEach(i => $(i).disabled = true);
+    $("vmbusy").textContent = j && j.action && !vmBusy ? j.action + " in progress..." : $("vmbusy").textContent;
+  } else {
+    const off = OFF.includes(j.state), running = j.state === "running", stable = off || running;
+    $("vm-start").disabled = $("vm-startgui").disabled = !off;
+    const hung = HUNG.includes(j.state);  // 0.39.3: a hung VM can still be powered off or reverted
+    $("vm-shutdown").disabled = !running || fetchRunning;
+    $("vm-poweroff").disabled = !(running || hung) || fetchRunning;
+    $("vm-revert").disabled = !(stable || hung) || fetchRunning || !j.clean_snapshot;  // 0.25.0: header Revert = the ★ default
+    $("vm-take").disabled = !off;  // 0.39.3: only while off (a running VM's RAM would be saved on the host)
+    $("vm-net").disabled = !stable || fetchRunning;
+    $("vm-update").disabled = !running || fetchRunning;
+    if (!j.action) $("vmbusy").textContent = stable ? "" : "VM is " + j.state + "...";
+  }
+  const why = !j ? "" : j.state !== "running" ? "Start the VM first" : verOk === false ? "VM and host versions differ" : "";
+  vmCanWork = !fetchRunning && !vmBusy && !!j && !j.action && !why;
+  $("browse").disabled = !vmCanWork;
+  $("browse").title = why || "List what MalwareBazaar has for this mode (metadata only, no files). Network ON for a few seconds";
+  pickButton(); triageButton();
+  $("ver-update").disabled = fetchRunning || !j || j.state !== "running";
+  snapButtons();
+}
+
+async function vm() {
+  if (vmBusy) return;  // no status polls while an action runs
+  try {
+    const was = vmInfo && vmInfo.badge && vmInfo.badge.key, j = vmInfo = await api("/api/vm");
+    const b = j.badge || { key: "other", label: j.state, tone: "warn", pulse: false };
+    // 0.31.0: Windows just became ready. Without a run level (old Guest Additions) wait a minute as before
+    if (was && was !== "running" && b.key === "running") setTimeout(version, j.run_level == null ? 60000 : 0);
+    $("vmname").textContent = j.vm;
+    labLabel(j.lab);
+    showBadge(b);
+    waitScreen({ ...j, badge: b });
+    netBadge();
+    $("vm-revert").title = j.clean_snapshot ? `Go back to ★ ${j.clean_snapshot} (asks first). Pick another one in the Snapshots tab`
+                                            : "No ★ default snapshot yet: set one in the Snapshots tab";
+    vmFails = 0;
+    vmButtons();
+    if (!$("pane-lab").hidden && !j.action) labMap();  // 0.41.0: the Lab tab follows the VM
+    clearTimeout(vmTimer);  // one pending re-poll at most, however many places called vm()
+    if (!OFF.includes(j.state) && j.state !== "running" || j.action) vmTimer = setTimeout(vm, 2000);  // follow transitions closely
+    else if (b.pulse && !fetchRunning) vmTimer = setTimeout(vm, 4000);  // booting, shutting down: until it settles
+  } catch (e) {
+    // a single failed background poll is usually VirtualBox busy mid-change; only shout if it persists
+    if (++vmFails >= 3) { showBadge({ key: "not_responding", label: "not responding", tone: "bad", pulse: false }); say(e.message, e.detail); }
+  }
+}
+
+// 0.31.0: one word for the VM, from the host (VirtualBox state + Windows ready + FatBox's own job). Text only.
+const TONES = ["ok", "warn", "accent", "muted", "bad"];
+function showBadge(b) {
+  const tone = TONES.includes(b.tone) ? b.tone : "warn";
+  $("vmstate").textContent = String(b.label);
+  $("vmid").className = `vmid t-${tone} k-${String(b.key).replace(/[^a-z_]/g, "")}` + (b.pulse ? " pulse" : "");
+  $("vmid").title = { booting: "The VM is on; waiting for Windows to be ready", not_responding: "Windows is not answering. Wait, or Power off and Start again",
+                      saved: "Memory saved. Start boots it fresh", crashed: "The VM stopped unexpectedly (VirtualBox: aborted). Start boots it fresh" }[b.key] || "";
+}
+
+async function vmDo(action, body, label) {
+  if (vmBusy) return;
+  vmBusy = true; $("vmbusy").textContent = label + "..."; say("");
+  // 0.31.0: no status polls while an action runs, so the badge says what is happening right away
+  const word = { start: "booting…", shutdown: "shutting down…", poweroff: "powering off…", snapshot: "taking snapshot…",
+                 "delete-snapshot": "deleting snapshot…",
+                 revert: vmInfo && body && body.name === vmInfo.clean_snapshot ? "reverting to clean…" : "reverting…" }[action];
+  if (word) showBadge({ key: action, label: word, tone: "warn", pulse: true });
+  if (action === "start") waitScreen({ badge: { key: "start" }, vm: vmInfo && vmInfo.vm });
+  vmButtons();
+  let again = null;
+  try { await api("/api/vm/" + action, body || {}); }
+  catch (e) {
+    // T-7: revert first copies the VM's reports to the library; if some didn't make it, ask before wiping them
+    if (e.unsaved && confirm(e.message + ".\n\nRevert anyway? Those reports are lost.")) again = { ...body, unsaved_ok: true };
+    else say(e.message, e.detail);
+  }
+  vmBusy = false; $("vmbusy").textContent = ""; vm();
+  if (action === "revert") { poll(); library(); }
+  if (["revert", "snapshot", "delete-snapshot"].includes(action)) snapshots();
+  if (again) return vmDo(action, again, label);
+}
+$("quit").onclick = async () => {
+  if (!confirm("Stop the FatBox host?\n\nThe VM keeps running. Open FatBox again from its shortcut.")) return;
+  try {
+    await api("/api/quit", {});
+    document.body.replaceChildren(el("h1", "FatBox host stopped."), el("p", "You can close this tab.", "muted"));
+  } catch (e) { say(e.message); }
+};
+$("vm-start").onclick = () => vmDo("start", { headless: true }, "starting");
+$("vm-startgui").onclick = () => vmDo("start", { headless: false }, "starting");
+$("vm-shutdown").onclick = () => vmDo("shutdown", {}, "sent shutdown (Windows may take a minute)");
+$("vm-poweroff").onclick = () => {
+  if (confirm("Power off the VM now? Like pulling the plug: unsaved work in the VM is lost."))
+    vmDo("poweroff", { confirm: true }, "powering off");
+};
+// 0.25.0: the header's Revert always goes to the ★ default; the Snapshots tab can revert to any snapshot
+function revertTo(name) {
+  if (name && confirm(`Revert "${vmInfo.vm}" to snapshot "${name}"?\n\nThe VM is powered off first. Everything since that snapshot is discarded, including fetched samples.` +
+                      (vmInfo.state === "running" ? "\nTheir reports are copied to the library first." : "")))
+    vmDo("revert", { name, confirm: true }, vmInfo.state === "running" ? "saving reports, then reverting" : "reverting");
+}
+$("vm-revert").onclick = () => revertTo(vmInfo && vmInfo.clean_snapshot);
+$("vm-take").onclick = () => {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  const name = prompt("Snapshot name (letters, digits, . _ -):", `snap-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`);
+  if (name) vmDo("snapshot", { name }, "taking snapshot");
+};
+$("vm-net").onclick = () => {
+  const on = vmInfo && vmInfo.cable !== "on";
+  if (on && !confirm("Turn the VM's internet ON by hand?\n\n" +
+      "- Any sample in the VM could reach the internet (call home, download more malware).\n" +
+      "- It stays ON until you click Disconnect. FatBox will not switch it off for you.\n" +
+      "- Don't open or run samples while it's ON.\n\n" +
+      "Fetch and Update VM turn the network on and off by themselves; you don't need this for them.")) return;
+  vmDo("network", on ? { on, confirm: true } : { on }, on ? "connecting" : "disconnecting");
+};
+
+// Host and VM must run the same FatBox version, else Fetch is off (the server refuses it too).
+async function version() {
+  try {
+    const v = await api("/api/version");
+    verOk = v.ok;
+    $("vermsg").textContent = v.ok ? "" : "⛔ " + v.message;
+    $("verbar").hidden = v.ok;
+  } catch (e) { verOk = null; $("verbar").hidden = true; }  // VM off or still starting: nothing to compare yet
+  vmButtons();
+  if (verOk) pending();  // 0.29.0: samples fetched earlier and not triaged yet -> step 3
+}
+
+// ---- T-7 report library ------------------------------------------------------
+// The table comes from the HOST's library (works with the VM off). The host checked every row; text nodes only.
+let libRows = [], libPicked = new Set(), libKey = "fetched_at", libDir = -1, libView = "new";
+const PRIO = { high: 3, medium: 2, low: 1 };
+async function library() {
+  try {
+    const j = await api("/api/library");
+    libRows = j.rows;
+    for (const n of j.notes || []) $("log").append("--- " + n + "\n");
+    renderLibrary();
+  } catch (e) { say(e.message, e.detail); $("empty").textContent = ""; }
+}
+// 0.28.0: "New" = every report waiting for Save or Discard; a row leaves it the moment it is saved or discarded
+// (it never depends on the VM, so a revert hides nothing). "Library" = the reports you saved, with search and Delete.
+const newRows = () => libRows.filter(r => !r.saved);
+const savedRows = () => libRows.filter(r => r.saved);
+// which rows may be ticked: in New the ones not saved yet; in Library the ones no longer in the VM
+const canPick = r => libView === "new" ? !r.saved : !r.in_vm;
+function matches(r, q) {
+  if (!q) return true;
+  return [r.signature, r.file_type, r.sha256, r.status, r.file_badge, r.code_badge, ...(r.tags || [])]
+    .some(v => typeof v === "string" && v.toLowerCase().includes(q));
+}
+function setView(v) {
+  libView = v;
+  $("view-new").classList.toggle("on", v === "new"); $("view-lib").classList.toggle("on", v === "lib");
+  $("libsearch").hidden = $("libdel").hidden = v !== "lib";
+  $("selall").hidden = $("libsave").hidden = $("libdiscard").hidden = v !== "new";
+  $("libtable").classList.toggle("lib", v === "lib");
+  libPicked.clear();
+  store("fbx-view", v); renderLibrary();
+}
+function renderLibrary() {
+  const key = r => libKey === "prio" ? (PRIO[r.priority] || 0) : ["in_vm", "saved"].includes(libKey) ? (r[libKey] ? 1 : 0)
+                 : (r[libKey] ?? (libKey === "score" ? -1 : ""));
+  const fresh = newRows(), kept = savedRows(), q = $("libsearch").value.trim().toLowerCase();
+  $("cnt-new").textContent = fresh.length; $("cnt-lib").textContent = kept.length;
+  const base = libView === "new" ? fresh : kept.filter(r => matches(r, q));
+  const rows = [...base].sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * libDir; });
+  const tb = $("rows"); tb.replaceChildren();
+  for (const s of [...libPicked]) { const r = base.find(x => x.sha256 === s); if (!r || !canPick(r)) libPicked.delete(s); }
+  for (const r of rows) {
+    const tr = el("tr");
+    const box = el("input"); box.type = "checkbox"; box.disabled = !canPick(r); box.checked = libPicked.has(r.sha256);
+    box.title = libView === "new" ? (r.saved ? "Already saved: delete it from Library" : "Tick to save or discard")
+              : r.in_vm ? "Still in the VM: it would come back at the next Refresh" : "Tick to delete from the library";
+    box.onclick = ev => { ev.stopPropagation(); if (box.checked) libPicked.add(r.sha256); else libPicked.delete(r.sha256); libButton(); };
+    const c0 = el("td"); c0.append(box); tr.append(c0);
+    const p = el("td"); p.append(el("span", r.priority || "-", "pill p-" + (r.priority || "none"))); tr.append(p);
+    tr.append(el("td", r.score ?? "-"), el("td", r.sha256.slice(0, 16) + "…", "mono"), el("td", r.signature || "-"),
+              el("td", r.file_type || "-"), el("td", r.file_badge || "—", r.file_badge ? (r.file_badge.includes("⚠") ? "warn" : null) : "muted"),
+              el("td", r.code_badge || "—", r.code_badge ? (r.code_badge.includes("⚠") ? "warn" : null) : "muted"),
+              el("td", r.status === "too_big" ? "too big · not analysed" : r.status, r.status === "too_big" ? "muted" : r.error ? "err" : null),
+              el("td", r.in_vm ? "✓" : "—", r.in_vm ? null : "muted"), el("td", r.fetched_at || "-", "muted libcol"),
+              el("td", r.has_report ? (r.analyzed_at || "-") : "(no report)", "muted libcol"));
+    tr.title = r.sha256 + (r.error ? "\n" + r.error : "");
+    if (r.has_report) tr.onclick = () => report(r.sha256, false);
+    else tr.onclick = () => say(`No report for ${r.sha256.slice(0, 16)}…` + (r.error ? ": " + r.error : r.in_vm ? ": not analysed yet" : ""));
+    tb.append(tr);
+  }
+  const inVm = libRows.filter(r => r.in_vm).length, unsaved = libRows.length - kept.length;
+  $("libsum").textContent = libView === "new" ? (unsaved ? `${unsaved} not saved yet` : libRows.length ? `${inVm} still in the VM` : "")
+                          : (q ? `${base.length} of ${kept.length} match` : `${kept.length} saved · ${kept.filter(r => r.in_vm).length} still in the VM`);
+  $("empty").classList.toggle("art", !libRows.length);
+  $("empty").textContent = rows.length ? "" : !libRows.length ? "Nothing yet. Fetch samples, or click Refresh to copy what the VM has."
+                         : libView === "new" ? "Nothing new: fetch samples, or open Library for older reports."
+                         : q ? "No report matches the search." : "No saved reports yet: save them from New.";
+  libButton();
+}
+function libButton() {
+  const n = libPicked.size;
+  $("libdel").textContent = `Delete from library (${n})`; $("libdel").disabled = !n;
+  $("libsave").textContent = `Save to library (${n})`; $("libsave").disabled = !n;
+  $("libdiscard").textContent = `Discard (${n})`; $("libdiscard").disabled = !n;
+  $("selall").disabled = !newRows().some(r => !r.saved);
+}
+$("selall").onclick = () => { for (const r of newRows()) if (!r.saved) libPicked.add(r.sha256); renderLibrary(); };
+$("libsave").onclick = async () => {
+  if (!libPicked.size) return;
+  try { const j = await api("/api/library/save", { sha256: [...libPicked] }); say(`${j.saved} report(s) saved to the library`); }
+  catch (e) { say(e.message, e.detail); }
+  libPicked.clear(); library();
+};
+$("libdiscard").onclick = async () => {
+  const n = libPicked.size;
+  if (!n || !confirm(`Discard ${n} report(s)?\n\nThey won't be kept or copied again. This can't be undone.`)) return;
+  try { const j = await api("/api/library/discard", { sha256: [...libPicked], confirm: true }); say(`${j.discarded} report(s) discarded`); }
+  catch (e) { say(e.message, e.detail); }
+  libPicked.clear(); library();
+};
+for (const th of document.querySelectorAll("#libtable th.sort")) th.onclick = () => {
+  libDir = libKey === th.dataset.k ? -libDir : (["signature", "file_type", "file_badge", "code_badge", "status", "saved"].includes(th.dataset.k) ? 1 : -1);
+  libKey = th.dataset.k; renderLibrary();
+};
+$("libdel").onclick = async () => {
+  const n = libPicked.size;
+  if (!n || !confirm(`Delete ${n} report(s) from the library?\n\nThis can't be undone.`)) return;
+  try { const j = await api("/api/library/delete", { sha256: [...libPicked], confirm: true }); say(`${j.deleted} report(s) deleted`); }
+  catch (e) { say(e.message, e.detail); }
+  libPicked.clear(); library();
+};
+$("view-new").onclick = () => setView("new");
+$("view-lib").onclick = () => setView("lib");
+$("libsearch").oninput = () => renderLibrary();
+function refresh() {
+  showTab("static"); version();
+  if (vmInfo && vmInfo.state === "running" && !fetchRunning) startJob("/api/sync", {});
+  else { library(); if (vmInfo && vmInfo.state !== "running") say("The VM is off: showing the library (reports saved on this host)"); }
+}
+
+function kv(pairs) {
+  const d = el("div", null, "kv");
+  for (const [k, v] of pairs) d.append(el("div", k), el("div", v ?? "-", "mono"));
+  return d;
+}
+function list(title, items) {
+  if (!items || !items.length) return [];
+  const ul = el("ul"); for (const i of items.slice(0, 200)) ul.append(el("li", i));
+  return [el("h3", title), ul];
+}
+
+// T-9: what the file is (DIE + signature). Plain text only, like the rest of the report.
+function fileAnalysis(fa) {
+  if (!fa) return [el("h3", "File analysis"), el("div", "Not in this report (made before FatBox 0.17.0).", "muted")];
+  const e = fa.engine || {}, eng = [e.die && "DIE " + e.die, e.die_python && "die-python " + e.die_python, e.signify && "signify " + e.signify].filter(Boolean).join(" · ");
+  const head = el("h3", "File analysis" + (eng ? "  ·  engine: " + eng : ""));
+  const failed = fa.status !== "ok" ? [el("div", `File analysis: ${fa.status}${fa.error ? " (" + fa.error + ")" : ""}. The rest of the report is complete.`, "err")] : [];
+  const j = a => (a && a.length ? a.join(" · ") : "-");
+  const ov = fa.overlay ? `offset ${fa.overlay.offset} · ${fa.overlay.size} bytes · entropy ${fa.overlay.entropy}` : "-";
+  const s = fa.signature;
+  const sig = !s ? "-" : !s.signed ? (s.signed === null ? "not checked" : "not signed")
+    : ["signed", s.signer ? `"${s.signer}"` : null, !s.checked ? "validity not checked" : s.valid ? "valid" : "INVALID",
+       s.reason].filter(Boolean).join(" · ");
+  return [head, ...failed, kv([["Type", fa.type], ["Compiler", j(fa.compiler)], ["Packer", j(fa.packer)], ["Protector", j(fa.protector)],
+                               ["Installer", j(fa.installer)], ["Runtime", j(fa.runtime)], ["Overlay", ov], ["Signature", sig],
+                               ["Packed?", `${fa.packed}: ${fa.packed_why || "-"}`]]),
+          ...list("Other (DIE)", fa.other)];
+}
+
+// T-14: what the code does (capa). Plain text only, like the rest of the report.
+// 0.18.3: same list as EVERYDAY_RULES in fatbox/static/code_analysis.py
+const CA_EVERYDAY_PE = new Set(["parse PE header", "access PE header", "enumerate PE sections", "inspect section memory permissions"]);
+const CA_WHY_NOT = c => c.topic === "other" ? "0 pts: everyday" : c.nursery ? "0 pts: draft rule" : c.scope === "file" ? "0 pts: file-wide match"
+  : CA_EVERYDAY_PE.has(c.name) ? "0 pts: everyday PE reading" : "0 pts";
+function codeAnalysis(ca) {
+  if (!ca) return [el("h3", "What the code does"), el("div", "Not in this report (made before FatBox 0.18.0).", "muted")];
+  const e = ca.engine || {}, eng = [e.capa && "capa " + e.capa, e.rules && "rules v" + e.rules].filter(Boolean).join(" · ");
+  const head = el("h3", "What the code does" + (eng ? "  ·  engine: " + eng : "") + (ca.format === "dotnet" ? "  ·  .NET" : ""));
+  if (ca.status === "skipped") return [head, el("div", ca.error || "Not a Windows program: capa runs on PE and .NET files.", "muted")];
+  if (ca.status !== "ok") return [head, el("div", `Code analysis: ${ca.status}${ca.error ? " (" + ca.error + ")" : ""}. The rest of the report is complete.`, "err")];
+  if (!ca.capabilities.length) return [head, el("div", "capa found no capabilities (a packed file shows only its unpacking stub).", "muted")];
+  const t = el("table"), hr = el("tr");
+  for (const h of ["Topic", "Capability", "ATT&CK", "Score"]) hr.append(el("th", h));
+  const th = el("thead"); th.append(hr); t.append(th);
+  const tb = el("tbody");
+  for (const c of ca.capabilities) {
+    const tr = el("tr"); tr.style.cursor = "default";
+    tr.append(el("td", c.topic, c.scored ? null : "muted"), el("td", c.name, c.scored ? null : "muted"),
+              el("td", c.attack.join(", ") || "-", "mono"), el("td", c.scored ? "counts" : CA_WHY_NOT(c), c.scored ? null : "muted"));
+    tb.append(tr);
+  }
+  t.append(tb);
+  return [head, el("div", "Rules matched in the sample's code. Points per topic are in \"Why N points\" at the top.", "muted"), t];
+}
+
+// ---- 0.30.0 report view: the verdict first, every detail one click away ---------------------------------------
+// Everything here is worked out on the host page from the checked report, by fixed rules (no guessing): the score
+// lines, the capa topics, File Analysis, string indicators, YARA and IOCs. Text nodes only, like the rest.
+const CAT_WORDS = { stealer: "information stealer", rat: "remote access trojan (RAT)", ransomware: "ransomware",
+  loader: "loader (fetches or unpacks other malware)", banker: "banking trojan", backdoor: "backdoor", wiper: "wiper",
+  worm: "worm", miner: "crypto miner" };
+const TOPIC_FIND = {  // capa topic -> plain words (title, severity, what it does as a verb phrase)
+  injection: ["Injects code into other programs", "high", "injects code into other programs"],
+  impact: ["Can damage files or the system", "high", "can damage files or the system"],
+  collection: ["Collects data from this PC", "high", "collects data from this PC"],
+  "load-code": ["Loads hidden code while running", "mid", "loads hidden code while running"],
+  "anti-analysis": ["Tries to notice analysis tools", "mid", "tries to notice analysis tools"],
+  persistence: ["Starts again with Windows", "mid", "starts again with Windows"],
+  encryption: ["Contains encryption code", "mid", "contains encryption code"],
+  communication: ["Talks to the internet", "low", "talks to the internet"],
+};
+const SEV = { high: 0, mid: 1, low: 2 };
+function scoreLines(reasons) {  // "+25 DIE names a malware family: X" -> {n, group, text}
+  const out = [];
+  for (const t of reasons || []) {
+    const m = /^\+(\d{1,3}) (.*)$/.exec(String(t)); if (!m) continue;
+    const n = +m[1], x = m[2];
+    const g = /malware family/.test(x) ? "family" : /^protector/.test(x) ? "protector" : /^packer/.test(x) ? "packed"
+      : /^code \(capa\) ([\w-]+)/.test(x) ? /^code \(capa\) ([\w-]+)/.exec(x)[1] : /^string indicator/.test(x) ? "strings"
+      : /^ransomware/.test(x) ? "ransomware" : /^YARA/.test(x) ? "YARA" : /network IOCs/.test(x) ? "network"
+      : /entropy/.test(x) ? "entropy" : /APIs imported/.test(x) ? x.split(" ")[0] + " imports" : /signature/.test(x) ? "signature"
+      : x.split(/[:(]/)[0].trim().split(" ").slice(0, 3).join(" ");
+    out.push({ n, group: g, text: x });
+  }
+  return out;
+}
+function findings(r) {
+  const out = [], fa = r.file_analysis || {}, ca = r.code_analysis || {}, iocs = r.iocs || {};
+  const lines = scoreLines(r.reasons);
+  const rw = lines.find(l => l.group === "ransomware" && l.n);
+  if (rw) out.push({ sev: "high", title: "Looks like ransomware", detail: rw.text.replace(/^ransomware pattern: /, ""), id: "T1486", verb: "has the ransomware pattern (backups wiped + files encrypted)" });
+  const caps = ca.status === "ok" ? (ca.capabilities || []).filter(c => c.scored) : [];
+  for (const [topic, [title, sev, verb]] of Object.entries(TOPIC_FIND)) {
+    const mine = caps.filter(c => c.topic === topic); if (!mine.length) continue;
+    const ids = [...new Set(mine.flatMap(c => c.attack || []))];
+    out.push({ sev, title, detail: "capa: " + mine.slice(0, 3).map(c => c.name).join(" · ") + (mine.length > 3 ? ` +${mine.length - 3} more` : ""), id: ids[0] || "", verb });
+  }
+  if (fa.status === "ok" && (fa.protector || []).length)
+    out.push({ sev: "high", title: "Hides its code", detail: "protector: " + fa.protector.slice(0, 3).join(", ") + (r.entropy != null ? ` · entropy ${r.entropy}` : ""), id: "T1027", verb: "hides its code (" + fa.protector[0] + ")" });
+  else if (fa.status === "ok" && (fa.packer || []).length)
+    out.push({ sev: "mid", title: "Packed", detail: "packer: " + fa.packer.slice(0, 3).join(", "), id: "T1027.002", verb: "is packed (" + fa.packer[0] + ")" });
+  const sig = fa.signature || {};
+  if (sig.signed && sig.checked && sig.valid === false) out.push({ sev: "mid", title: "Broken digital signature", detail: sig.reason || "verification failed", id: "", verb: "has a broken signature" });
+  for (const b of (r.behaviour || []).slice(0, 3))
+    out.push({ sev: "mid", title: "Its text mentions " + b.indicator, detail: "found in the strings only, not confirmed in the code", id: b.attack || "", verb: "mentions " + b.indicator });
+  const y = (r.yara || []).map(x => x.rule);
+  if (lines.some(l => l.group === "YARA" && l.n)) out.push({ sev: "mid", title: "Matches YARA rules", detail: y.slice(0, 4).join(", "), id: "", verb: "matches YARA rules" });
+  const net = ["urls", "domains", "ipv4"].reduce((a, k) => a + ((iocs[k] || []).length), 0);
+  if (lines.some(l => l.group === "network" && l.n) && !caps.some(c => c.topic === "communication"))
+    out.push({ sev: "low", title: "Contains internet addresses", detail: `${net} in its strings (see Network indicators)`, id: "", verb: "contains internet addresses" });
+  return out.sort((a, b) => SEV[a.sev] - SEV[b.sev]);
+}
+function verdict(r, cats, finds) {
+  const p = r.priority, cat = cats.find(c => CAT_WORDS[c]), fam = (r.source_meta || {}).signature;
+  let first;
+  const an = w => (/^[aeiou]/i.test(w) ? "an " : "a ") + w;
+  if (p === "high") first = cat ? `Likely ${an(CAT_WORDS[cat])}.` : "Likely malicious.";
+  else if (p === "medium") first = cat ? `Suspicious; labelled ${CAT_WORDS[cat]}.` : "Suspicious.";
+  else first = cat || fam ? `Few signs in the file itself, although the feed labels it ${cat ? CAT_WORDS[cat] : fam}.` : "No strong signs of malware found.";
+  const verbs = finds.slice(0, 3).map(f => f.verb);
+  const what = (verbs.length ? " It " + (verbs.length > 1 ? verbs.slice(0, -1).join(", ") + " and " + verbs[verbs.length - 1] : verbs[0]) + "." : "")
+    + (p === "low" ? " A low score is not proof that the file is safe." : "");
+  const fa = r.file_analysis || {}, ca = r.code_analysis || {};
+  const part = ca.status === "skipped" && /packed/i.test(ca.error || "") ? " Packed: the code view is partial." : "";
+  return first + what + part;
+}
+function copyBtn(text, label) {
+  const b = el("button", label || "Copy", "copy"); b.type = "button";
+  b.onclick = async ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
+    setTimeout(() => { b.textContent = label || "Copy"; }, 1200);
+  };
+  return b;
+}
+// IOCs come from the sample's strings: shown and copied defanged, never as links
+const defang = v => String(v).replace(/^(h)tt(ps?)/i, "$1xx$2").replace(/(?<!\[)\.(?!\])/g, "[.]");
+function fold(title, summary, kids, open) {
+  const d = el("details"); if (open) d.open = true;
+  const s = el("summary"); s.append(el("b", title)); if (summary) s.append(el("span", summary, "c"));
+  const inner = el("div", null, "in"); inner.append(...kids);
+  d.append(s, inner); return d;
+}
+function ring(score, prio) {
+  const NS = "http://www.w3.org/2000/svg", col = prio === "high" ? "var(--bad)" : prio === "medium" ? "var(--warn)" : "var(--ok)";
+  const w = el("div", null, "ring"), svg = document.createElementNS(NS, "svg"); svg.setAttribute("viewBox", "0 0 36 36");
+  const c = (cls, dash) => { const e = document.createElementNS(NS, "circle"); for (const [k, v] of [["cx", 18], ["cy", 18], ["r", 15.5], ["fill", "none"], ["stroke-width", 3], ["class", cls]]) e.setAttribute(k, v);
+    if (dash != null) { e.setAttribute("pathLength", 100); e.setAttribute("stroke-dasharray", `${dash} 100`); e.setAttribute("transform", "rotate(-90 18 18)"); e.style.stroke = col; } return e; };
+  svg.append(c("track"), c("arc", Math.max(0, Math.min(100, score || 0))));
+  const v = el("div", null, "v"), inner = el("div"); inner.append(el("b", score ?? "-"), el("span", prio || "-")); inner.lastChild.style.color = col;
+  v.append(inner); w.append(svg, v); return w;
+}
+const BAR_COLORS = ["#e5676b", "#d08a5a", "#e6b450", "#b9a06a", "#8a909c", "#6f7782", "#5a616b", "#4b515a"];
+function scoreBar(r) {
+  const groups = new Map();
+  for (const l of scoreLines(r.reasons)) if (l.n) groups.set(l.group, (groups.get(l.group) || 0) + l.n);
+  const g = [...groups].sort((a, b) => b[1] - a[1]), total = g.reduce((a, x) => a + x[1], 0);
+  const sec = el("div", null, "rsec"); sec.append(el("div", `Why ${r.score} points` + (total > 100 ? ` (capped at 100 from ${total})` : ""), "rlbl"));
+  if (!g.length) { sec.append(el("div", "No rule added points.", "muted")); return sec; }
+  const bar = el("div", null, "stack"), leg = el("div", null, "leg");
+  g.forEach(([name, n], i) => {
+    const col = BAR_COLORS[Math.min(i, BAR_COLORS.length - 1)], seg = el("span"); seg.style.flex = String(n); seg.style.background = col; seg.title = `${name} +${n}`;
+    bar.append(seg); const it = el("span"), dot = el("i"); dot.style.background = col; it.append(dot, `${name} +${n}`); leg.append(it);
+  });
+  if (total < 100) { const rest = el("span"); rest.style.flex = String(100 - total); rest.style.background = "transparent"; bar.append(rest); }
+  sec.append(bar, leg); return sec;
+}
+function fmtBytes(n) { return typeof n !== "number" ? "-" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
+
+async function report(sha, refresh) {
+  const body = $("dbody"); body.replaceChildren(el("div", "Loading...", "empty"));
+  $("dsha").textContent = "· static analysis only, the sample was never run"; $("dsha").className = "muted"; $("dreload").onclick = () => report(sha, true);
+  if (!$("dlg").open) $("dlg").showModal();
+  try {
+    const r = await api("/api/report?sha256=" + encodeURIComponent(sha) + (refresh ? "&refresh=1" : ""));
+    const hv = r.host_view || { categories: [] }; delete r.host_view;  // the host's words, not part of the report
+    const m = r.source_meta || {}, pe = r.pe || null, h = r.hashes || {}, fa = r.file_analysis || {}, ca = r.code_analysis || {};
+    const finds = findings(r), cats = hv.categories || [];
+    // 1. verdict
+    const hero = el("div", null, "rhero"), txt = el("div"); txt.style.minWidth = "0";
+    const h2 = el("h2", m.signature || "Unknown family"); if (cats[0]) h2.append(el("span", cats[0], "rpill"));
+    const kind = [fa.type || (pe ? "PE" : null), pe && pe.is_dotnet ? ".NET" : null, pe ? (pe.is_dll ? "dll" : "exe") : null].filter(Boolean).join(" · ") || r.kind || "-";
+    const s = fa.signature, signed = !s ? null : !s.signed ? (s.signed === null ? "signature not checked" : "not signed") : s.checked ? (s.valid ? "signed, valid" : "signature INVALID") : "signed (not checked)";
+    const meta = el("div", null, "rmeta");
+    for (const x of [kind, fmtBytes(r.size), signed, pe && pe.compile_time && pe.reproducible_build !== true ? "compiled " + String(pe.compile_time).slice(0, 10) : null,
+                     fa.packed ? "packed: " + fa.packed : null]) if (x) meta.append(el("span", x));
+    const shaRow = el("div", null, "rsha"); shaRow.append(el("span", "SHA-256", "muted"), el("span", (h.sha256 || sha).slice(0, 16) + "…" + (h.sha256 || sha).slice(-4), "mono"), copyBtn(h.sha256 || sha));
+    txt.append(h2, el("div", verdict(r, cats, finds), "verdict"), meta, shaRow);
+    hero.append(ring(r.score, r.priority), txt);
+    const parts = [hero];
+    // 2. key findings
+    const fs = el("div", null, "rsec"); fs.append(el("div", "Key findings", "rlbl"));
+    if (!finds.length) fs.append(el("div", "Nothing stood out. A low score is not proof that the file is safe.", "muted"));
+    for (const f of finds.slice(0, 5)) {
+      const row = el("div", null, "find"), t = el("div"); t.append(el("b", f.title), el("div", f.detail, "dt"));
+      row.append(el("span", null, "sv " + f.sev), t, el("span", f.id, "id mono")); fs.append(row);
+    }
+    if (finds.length > 5) fs.append(el("div", `+${finds.length - 5} more in the sections below`, "muted"));
+    parts.push(fs, scoreBar(r));
+    // 3. folded details
+    if ((r.errors || []).length) parts.push(fold("Errors", `${r.errors.length}`, list("", r.errors).slice(1), true));
+    const faSum = fa.status && fa.status !== "ok" ? fa.status : [fa.type, ...(fa.compiler || []).slice(0, 1), ...(fa.protector || []).slice(0, 1), ...(fa.packer || []).slice(0, 1), signed].filter(Boolean).join(" · ");
+    const engineLine = p => [el("div", p[0].textContent.replace(/^[^·]*·?\s*/, ""), "muted"), ...p.slice(1)];  // keep the engine versions
+    parts.push(fold("File", r.file_analysis ? faSum : "not in this report", engineLine(fileAnalysis(r.file_analysis))));
+    const capN = (ca.capabilities || []).length, capS = (ca.capabilities || []).filter(c => c.scored).length;
+    parts.push(fold("What the code does", !r.code_analysis ? "not in this report" : ca.status === "ok" ? `${capN} capabilities · ${capS} count` : ca.status, engineLine(codeAnalysis(r.code_analysis))));
+    const NET = { urls: "URL", domains: "Domain", ipv4: "IP", ipv4_private: "Local IP", emails: "Email" };
+    const iocRows = [], other = [];
+    for (const [k, v] of Object.entries(r.iocs || {})) if (Array.isArray(v) && v.length) {
+      if (NET[k]) for (const x of v.slice(0, 200)) iocRows.push([NET[k], defang(x)]);
+      else other.push(...list(`${k.replace(/_/g, " ")} (${v.length}, raw)`, v));
+    }
+    const ik = [el("div", "Defanged, never clickable. Found in the file's strings, not seen live.", "muted")];
+    for (const [k, v] of iocRows) { const row = el("div", null, "ioc"); row.append(el("span", k, "muted"), el("span", v, "mono"), copyBtn(v)); ik.push(row); }
+    const allBtn = iocRows.length ? copyBtn(iocRows.map(x => x[1]).join("\n"), "Copy all") : null;
+    const netFold = fold("Network indicators", iocRows.length ? String(iocRows.length) : "none", iocRows.length ? ik : [el("div", "None found in the strings.", "muted")]);
+    if (allBtn) netFold.querySelector("summary").append(allBtn);
+    parts.push(netFold);
+    if (other.length) parts.push(fold("Registry keys, paths and wallets", "from the strings", other));
+    const imps = pe && pe.suspicious_imports ? pe.suspicious_imports : [], beh = r.behaviour || [], yr = r.yara || [];
+    parts.push(fold("Strings, imports and YARA", [[beh.length, "behaviour"], [imps.length, "import"], [yr.length, "YARA rule"]].map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`).join(" · "),
+      [...list("Behaviour indicators (strings only, unconfirmed)", beh.map(b => `${b.indicator}  ${b.attack}`)),
+       ...list("Suspicious imports", imps.map(i => `${i.api}  [${i.category}]  ${i.attack}`)),
+       ...list("YARA", yr.map(y => y.rule)),
+       ...(beh.length || imps.length || yr.length ? [] : [el("div", "Nothing here.", "muted")])]));
+    const hk = [kv([["MD5", h.md5], ["SHA-1", h.sha1], ["SHA-256", h.sha256], ["Tags", (m.tags || []).join(", ")], ["Kind", r.kind], ["Size", r.size], ["Entropy", r.entropy]])];
+    if (pe) hk.push(el("h3", "PE"), kv([["Machine", pe.machine], ["DLL", pe.is_dll], [".NET", pe.is_dotnet], ["Compiled", pe.reproducible_build === true ? "not a real date (reproducible build)" : pe.compile_time],
+                                         ["imphash", pe.imphash], ["PDB", pe.pdb_path],
+                                         ["P/Invoke", pe.dotnet && Array.isArray(pe.dotnet.pinvoke) ? pe.dotnet.pinvoke.slice(0, 40).join(", ") : null], ["Packer hints", (pe.packer_hints || []).join(", ")]]));
+    parts.push(fold("Hashes and PE details", "MD5 · SHA-1 · SHA-256" + (pe && pe.imphash ? " · imphash" : ""), hk));
+    parts.push(fold("Every score line", `${(r.reasons || []).length} lines, +0 ones too`, list("", r.reasons).slice(1)));
+    parts.push(fold("Raw JSON", "for experts", [el("pre", JSON.stringify(r, null, 1))]));
+    body.replaceChildren(...parts);
+  } catch (e) { body.replaceChildren(el("div", e.message, "err")); }
+}
+
+let since = 0, polling = null, pollCount = 0, triageShown = false;
+// after a triage: show the new reports (they are in the library). 0.38.0: also called when the VM's auto-revert
+// runs on as its own job, so the reports appear before the revert ends
+function triageDone(j) {
+  if (triageShown) return;
+  triageShown = true;
+  if (!j.error) { pendingN = 0; cands = []; setStep(1); showTab("static"); setView("new"); }
+  library();
+}
+async function poll() {
+  try {
+    const j = await api("/api/job?since=" + since);
+    const log = $("log");
+    for (const l of j.lines) { log.append(l.t + "\n"); since = l.n; }
+    if (j.lines.length) log.scrollTop = log.scrollHeight;
+    const was = fetchRunning, running = fetchRunning = j.state === "running";
+    job = j; fetchTab();
+    $("jobstate").textContent = j.state === "idle" ? "" : `${j.kind} ${j.state}` + (j.error ? ": " + j.error : "");
+    $("jobstate").className = j.error ? "err" : "muted";
+    $("cancel").disabled = !running; vmButtons(); netBadge();
+    if (running !== was || (running && ++pollCount % 3 === 0)) vm();  // follow the cable while a job runs
+    if (running && j.kind === "triage") triageShown = false;
+    if (running && j.kind === "revert") triageDone(j);  // 0.38.0: reports first, the revert runs on behind them
+    if (!running && polling) {
+      clearInterval(polling); polling = null;
+      if (j.error) say(j.error, j.detail);           // it never got going (VM still booting, versions differ...)
+      if (j.kind === "browse") { if (j.result) showCandidates(j.result); }
+      else if (j.kind === "sync") library();
+      else if (j.kind === "clean") { library(); snapshots(); vm(); version(); }
+      else if (j.kind === "fetch") { if (j.result) { markFetched(); showFetched(j.result); } }  // even if a step failed
+      else if (j.kind === "triage") { triageDone(j); snapshots(); vm(); version(); }
+      else if (j.kind === "revert") { triageDone(j); library(); snapshots(); vm(); version(); }
+      else version();
+    }
+  } catch (e) { say(e.message, e.detail); }
+}
+
+async function startJob(path, body) {
+  say("");
+  try {
+    await api(path, body);
+    if (!polling) polling = setInterval(poll, 1500);
+    poll();
+  } catch (e) { say(e.message, e.detail); }
+}
+// ---- T-13 browse and pick, 0.29.0 steps: Browse & pick -> Fetch -> Triage ------------------------------
+// Rows come from the VM (MalwareBazaar metadata, untrusted). The host checked them, computed the pre-score and
+// marked what the Settings filters skip (r.skip); here they only go into text nodes (el), never into HTML.
+let cands = [], picked = new Set(), sortKey = "prescore", sortDir = -1, lastPicked = [], vmCanWork = false;
+let fetched = [], pendingN = 0, step = 1, job = null;
+// 0.33.0: the Fetch tab's label is the step guide. job = {kind, state, progress} from the last /api/job poll;
+// progress is [done, total] the host already checked (1..30), shown only, never used to allow anything
+function fetchTab() {
+  const run = job && job.state === "running" ? job.kind : null, p = job && job.progress;
+  const words = { fetch: "Fetching", triage: "Triaging", browse: "Browsing", revert: "Resetting the VM" };
+  let txt, act = false;
+  if (words[run]) { txt = words[run] + (p ? ` ${p[0]} of ${p[1]}` : "…"); act = true; }
+  else if (step === 3) { txt = pendingN ? `Triage · ${pendingN} ready` : "Triage"; act = pendingN > 0; }
+  else txt = "Browse & pick";
+  $("fetchstep").textContent = "· " + txt;
+  $("fetchstep").className = "tsub" + (act ? " act" : "");
+  $("fetchspin").hidden = !words[run];
+  $("fetchprog").hidden = !words[run] || !p;
+  $("fetchprog").firstChild.style.width = p ? Math.round(100 * p[0] / p[1]) + "%" : "0";
+  $("tab-fetch").classList.toggle("busy", !!(words[run] && p));
+}
+const MB = 1024 * 1024;
+function fmtSize(n) { return n == null ? "?" : n >= MB ? (n / MB).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
+function setStep(n) {
+  step = n;
+  fetchTab();
+  const browsing = n < 3;
+  $("browsefilters").hidden = $("browsewrap").hidden = $("pickbar").hidden = !browsing || !cands.length;
+  $("fetchedwrap").hidden = $("triagebar").hidden = browsing;
+}
+// Show: quick view filters on the listed rows only. Nothing here overlaps Settings (types, sizes, tags-only,
+// never-families), which the host already applied: rows it skipped are not listed at all.
+const CATS = ["ransomware", "wiper", "rat", "stealer", "banker", "backdoor", "loader", "worm", "miner", ""];
+const DAY = 86400000;
+const SHOW = {
+  cat:   { label: "Category", multi: true, opts: () => CATS.map(c => [c, c || "unlabeled", listed().filter(r => c ? r.categories.includes(c) : !r.categories.length).length]),
+           test: (r, v) => r.categories.length ? r.categories.some(c => v.has(c)) : v.has("") },
+  fam:   { label: "Family", multi: true, search: true, opts: () => counted(r => [r.signature || ""], "unknown"),
+           test: (r, v) => v.has(r.signature || "") },
+  tag:   { label: "Tags", multi: true, search: true, opts: () => counted(r => r.tags, null),
+           test: (r, v) => r.tags.some(t => v.has(t)) },
+  score: { label: "Pre-score", opts: () => [["", "any"], ["30", "30 or more"], ["60", "60 or more"]],
+           test: (r, v) => r.prescore >= +v },
+  seen:  { label: "First seen", opts: () => [["", "any"], ["1", "last hour"], ["24", "last 24 hours"], ["168", "last 7 days"]],
+           test: (r, v) => { const t = Date.parse((r.first_seen || "").replace(" ", "T") + "Z"); return !isNaN(t) && Date.now() - t <= +v * 3600000; } },
+  hide:  { label: "Hide", multi: true, opts: () => [["vm", "already in the VM"], ["lib", "already in the library"]],
+           test: (r, v) => !(v.has("vm") && r.in_vm) && !(v.has("lib") && r.in_library) },
+};
+const showState = {};  // key -> Set (multi; empty = all) or string ("" = any)
+function resetShow() { for (const k in SHOW) showState[k] = SHOW[k].multi ? new Set(k === "hide" ? ["vm", "lib"] : []) : ""; }
+resetShow();
+function counted(f, emptyName) {
+  const m = new Map();
+  for (const r of listed()) for (const v of f(r)) if (v || emptyName) m.set(v, (m.get(v) || 0) + 1);
+  return [...m].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(b[0])).map(([v, n]) => [v, v || emptyName, n]);
+}
+const listed = () => cands.filter(r => !r.skip);
+function summary(k) {
+  const v = showState[k], d = SHOW[k];
+  if (d.multi) return v.size ? (v.size === 1 ? d.opts().find(o => v.has(o[0]))?.[1] ?? "1" : String(v.size)) : (k === "hide" ? "none" : "all");
+  return d.opts().find(o => o[0] === v)[1];
+}
+let openDd = null;
+function buildShow() {
+  const box = $("ddbox"); box.replaceChildren();
+  for (const k in SHOW) {
+    const d = SHOW[k], wrap = el("span", null, "dd" + (openDd === k ? " open" : "")), btn = el("button", d.label);
+    btn.append(el("b", summary(k))); btn.onclick = ev => { ev.stopPropagation(); openDd = openDd === k ? null : k; buildShow(); };
+    wrap.append(btn);
+    if (openDd === k) wrap.append(menu(k));
+    box.append(wrap);
+  }
+}
+function menu(k) {
+  const d = SHOW[k], m = el("div", null, "menu"), list = el("div", null, "opts");
+  m.onclick = ev => ev.stopPropagation();
+  const fill = q => {
+    list.replaceChildren();
+    const opts = d.opts().filter(o => !q || String(o[1]).toLowerCase().includes(q));
+    for (const [v, text, n] of opts) {
+      const lab = el("label"), inp = el("input");
+      inp.type = d.multi ? "checkbox" : "radio"; inp.name = "dd-" + k;
+      inp.checked = d.multi ? showState[k].has(v) : showState[k] === v;
+      inp.onchange = () => {
+        if (d.multi) { if (inp.checked) showState[k].add(v); else showState[k].delete(v); }
+        else { showState[k] = v; openDd = null; }
+        buildShow(); renderCandidates();
+      };
+      lab.append(inp, el("span", text)); if (n != null) lab.append(el("span", n, "c"));
+      list.append(lab);
+    }
+    if (!opts.length) list.append(el("div", "nothing", "none"));
+  };
+  if (d.search) {
+    const q = el("input"); q.type = "search"; q.placeholder = "Search " + d.label.toLowerCase() + "…"; q.maxLength = 40;
+    q.oninput = () => fill(q.value.trim().toLowerCase()); m.append(q); setTimeout(() => q.focus(), 0);
+  }
+  fill(""); m.append(list);
+  return m;
+}
+document.addEventListener("click", () => { if (openDd) { openDd = null; buildShow(); } });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && openDd) { openDd = null; buildShow(); } });
+$("clearshow").onclick = () => { resetShow(); openDd = null; buildShow(); renderCandidates(); };
+
+function showCandidates(rows) {
+  cands = rows; picked.clear(); resetShow(); openDd = null;
+  setStep(1); buildShow(); renderCandidates();
+}
+function renderCandidates() {
+  if (!cands.length) { pickButton(); return; }
+  const shown = listed().filter(r => Object.keys(SHOW).every(k => {
+    const v = showState[k]; return SHOW[k].multi ? !v.size || SHOW[k].test(r, v) : v === "" || SHOW[k].test(r, v);
+  }));
+  const key = r => sortKey === "cat" ? (r.categories[0] || "") : (r[sortKey] ?? "");
+  shown.sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
+  const tb = $("brows"); tb.replaceChildren();
+  for (const r of shown) {
+    const off = r.in_vm || r.in_library, tr = el("tr", null, off ? "off" : null);
+    const box = el("input"); box.type = "checkbox"; box.disabled = off; box.checked = picked.has(r.sha256);
+    box.onclick = ev => { ev.stopPropagation(); togglePick(r.sha256, box); };
+    const c0 = el("td"); c0.append(box);
+    const ps = el("td"); ps.append(el("span", String(r.prescore), "pill " + (r.prescore >= 60 ? "p-high" : r.prescore >= 30 ? "p-medium" : "p-low")));
+    ps.title = r.prescore_why.join("\n");
+    tr.append(c0, ps, el("td", r.signature || "-"), el("td", r.categories.join(", ") || "-"), el("td", r.file_type || "-"),
+              el("td", fmtSize(r.file_size)), el("td", r.tags.slice(0, 6).join(", "), "muted"), el("td", r.first_seen || "-", "muted"),
+              el("td", r.sha256.slice(0, 16) + "…", "mono"));
+    tr.title = r.sha256 + (r.in_vm ? "\nalready in the VM" : r.in_library ? "\nalready in the library" : "");
+    if (!off) tr.onclick = () => { box.checked = !box.checked; togglePick(r.sha256, box); };
+    tb.append(tr);
+  }
+  for (const s of [...picked]) { const r = cands.find(c => c.sha256 === s); if (!r || r.skip || r.in_vm || r.in_library) picked.delete(s); }
+  pickButton(shown.length);
+}
+function togglePick(sha, box) {
+  if (box.checked && picked.size >= 30) { box.checked = false; say("At most 30 samples per fetch"); return; }
+  if (box.checked) picked.add(sha); else picked.delete(sha);
+  pickButton();
+}
+let shownCount = 0;
+function pickButton(n) {
+  if (n !== undefined) shownCount = n;
+  const bytes = cands.filter(r => picked.has(r.sha256)).reduce((a, r) => a + (r.file_size || 0), 0);
+  const hidden = cands.length - listed().length;
+  $("picksum").replaceChildren(el("b", `${picked.size} selected`), picked.size ? ` · ${fmtSize(bytes)}` : "");
+  $("pickinfo").textContent = `· ${shownCount} of ${listed().length} rows shown` + (hidden ? ` · ${hidden} hidden by Settings` : "") + " · up to 30 per fetch";
+  $("fetchpicked").textContent = `Fetch selected (${picked.size})`;
+  $("fetchpicked").disabled = !picked.size || !vmCanWork;
+}
+function triageButton() {
+  $("triagebtn").textContent = pendingN ? `Triage ${pendingN} in VM →` : "Triage in VM";
+  $("triagebtn").disabled = !pendingN || !vmCanWork;
+  $("triagesum").textContent = "Network OFF · " + (pendingN ? `${pendingN} waiting for triage` : "nothing waiting for triage");
+}
+// Step 3 table: what the fetch brought (or, after a reload, what waits in the VM). Status words are the host's own.
+const FSTAT = { fetched: ["✓ in the VM, quarantined", "ok"], missing: ["not downloaded (see the log)", "warn"],
+                too_big: ["too big: not kept", "warn"], static_done: ["already analysed", "muted"] };
+function showFetched(rows) {
+  fetched = rows; pendingN = rows.filter(r => r.status === "fetched").length;
+  const tb = $("frows"); tb.replaceChildren();
+  for (const r of rows) {
+    const c = cands.find(x => x.sha256 === r.sha256) || r, [txt, cls] = FSTAT[r.status] || [r.status, "muted"];
+    const tr = el("tr"); tr.title = r.sha256;
+    tr.append(el("td", c.signature || "-"), el("td", c.file_type || "-"), el("td", c.file_size != null ? fmtSize(c.file_size) : "-"),
+              el("td", txt, cls), el("td", r.sha256.slice(0, 16) + "…", "mono"));
+    tb.append(tr);
+  }
+  setStep(3); triageButton(); fetchTab();
+}
+async function pending() {  // after a reload: samples fetched earlier still wait for triage -> open step 3
+  if (step !== 1 || cands.length || !vmInfo || vmInfo.state !== "running" || fetchRunning) return;
+  try { const j = await api("/api/pending"); if (!j.busy && j.rows.length) showFetched(j.rows.map(r => ({ ...r, status: "fetched" }))); }
+  catch (e) { /* VM not ready yet: Browse still works */ }
+}
+function markFetched() {
+  for (const r of cands) if (lastPicked.includes(r.sha256)) r.in_vm = true;
+  picked.clear(); renderCandidates();
+}
+for (const th of document.querySelectorAll("#browsewrap th.sort")) th.onclick = () => {
+  sortDir = sortKey === th.dataset.k ? -sortDir : (th.dataset.k === "prescore" || th.dataset.k === "file_size" || th.dataset.k === "first_seen" ? -1 : 1);
+  sortKey = th.dataset.k; renderCandidates();
+};
+$("browse").onclick = () => startJob("/api/browse", { mode: $("mode").value, value: $("value").value, limit: $("limit").value });
+$("fetchpicked").onclick = () => {
+  if (!prefsView) { say("Settings are still loading: try again in a moment"); return; }
+  const f = prefsView.fetch;
+  lastPicked = [...picked];
+  startJob("/api/fetch", { pick: lastPicked, size_limit: f.size_limit, max_size_mb: f.max_size_mb, budget: f.budget });
+};
+$("triagebtn").onclick = () => startJob("/api/triage", {});
+$("backbrowse").onclick = () => setStep(1);
+setStep(1);
+// ---- T-8 snapshots ------------------------------------------------------------
+// Names come from VirtualBox (host side); text nodes only, like everything else.
+let snapView = null;
+async function snapshots() {
+  try {
+    const v = snapView = await api("/api/snapshots");
+    for (const n of v.notes || []) $("log").append("--- " + n + "\n");
+    $("snapwarn").textContent = v.warning ? "⚠ " + v.warning : ""; $("snapwarn").hidden = !v.warning;
+    const tb = $("snaprows"); tb.replaceChildren();
+    for (const r of v.rows) {
+      const tr = el("tr");
+      const act = el("td");
+      if (!r.default) {
+        const sd = el("button", "Set default", "b"); sd.onclick = () => snapDo("/api/snapshots/default", { uuid: r.uuid });
+        const del = el("button", "Delete", "b");
+        del.onclick = () => { if (confirm(`Delete snapshot "${r.name}"?\n\nThis can't be undone. VirtualBox may take a few minutes.`))
+                                vmDo("delete-snapshot", { uuid: r.uuid, confirm: true }, "deleting snapshot"); };
+        act.append(sd, " ", del);
+      }
+      const rv = el("button", "Revert", "b");
+      rv.onclick = () => revertTo(r.name);
+      act.append(" ", rv);
+      tr.append(el("td", r.default ? "★" : ""), el("td", r.name + (r.current ? "  (current)" : ""), "mono"),
+                el("td", r.checked ? "✓ checked by FatBox" : "— not checked", r.checked ? "ok" : "muted"),
+                el("td", r.version || "?", "muted"), el("td", r.taken || "-", "muted"), act);
+      tb.append(tr);
+    }
+    $("snapempty").classList.toggle("art", !v.rows.length);
+    $("snapempty").textContent = v.rows.length ? "" : "No snapshots yet. Start the VM, then click Make clean snapshot.";
+    $("autorevert").checked = v.auto_revert;
+    $("autorevert").disabled = !v.default;
+    $("autoname").textContent = v.default ? "→ " + v.default.name + " ★" : "(set a default snapshot first)";
+    fromChips();
+    snapButtons();
+  } catch (e) { $("snapempty").textContent = ""; say(e.message, e.detail); }
+}
+function snapButtons() {
+  const running = vmInfo && vmInfo.state === "running";
+  $("makeclean").disabled = fetchRunning || vmBusy || !running || verOk === false;
+  $("makeclean").title = !running ? "Start the VM first" : verOk === false ? "VM and host versions differ: Update VM first"
+                         : "Copy reports, empty the VM, check it, shut it down, take the snapshot and make it the default, then start from it";
+}
+async function snapDo(path, body) {
+  try { await api(path, body); } catch (e) { say(e.message, e.detail); }
+  snapshots(); vm();
+}
+$("autorevert").onchange = () => snapDo("/api/settings", { auto_revert: $("autorevert").checked });
+$("makeclean").onclick = () => {
+  if (confirm("Make a clean snapshot?\n\n1. Copy every report into the library\n2. DELETE every sample and report in the VM\n" +
+              "3. Check the VM lists 0 samples\n4. Shut it down, take the snapshot and make it the default\n5. Start the VM from it and check it again (a few minutes in all)\n\n" +
+              "If any step fails, it stops and takes no snapshot."))
+    startJob("/api/clean-snapshot", {});
+};
+
+function showTab(name) {
+  for (const t of ["lab", "fetch", "static", "snaps", "settings"]) {
+    $("pane-" + t).hidden = t !== name;
+    $("tab-" + t).classList.toggle("on", t === name);
+    $("tab-" + t).setAttribute("aria-selected", String(t === name));
+  }
+}
+$("tab-lab").onclick = () => { showTab("lab"); labMap(); };
+$("tab-fetch").onclick = () => showTab("fetch");
+$("tab-static").onclick = () => showTab("static");
+$("tab-snaps").onclick = () => { showTab("snaps"); snapshots(); };
+$("tab-settings").onclick = () => { showTab("settings"); prefs(); labLoad(); };
+
+// ---- 0.41.0 Lab tab (T-24 part 1) ------------------------------------------------------
+// Everything shown comes from /api/labmap (host + VirtualBox); built with textContent, never as HTML.
+const GB = mb => (mb / 1024).toFixed(mb >= 10240 ? 0 : 1).replace(/\.0$/, "") + " GB";
+function labMapRender(m) {
+  $("lablayout").textContent = (LAYOUT_NAMES[m.layout] || m.layout) + (m.address ? " (" + m.address + ")" : "");
+  $("lhostname").textContent = m.layout === "one-pc" ? "This PC" : "Test PC";
+  $("lhostram").textContent = m.host ? GB(m.host.total_mb) + " RAM · FatBox " + m.version : "FatBox " + m.version;
+  const box = $("lvms"); box.replaceChildren();
+  const rows = $("labrows"); rows.replaceChildren();
+  for (const v of m.vms) {
+    const b = v.badge || { label: v.state, tone: "muted" }, tone = TONES.includes(b.tone) ? b.tone : "muted";
+    const n = el("div", "", "lnode" + (v.active ? " act" : ""));
+    const t = el("div"); t.append(Object.assign(el("span", "", "ldot " + tone)), el("b", v.name));
+    if (v.active) t.append(el("span", "active", "lpill"));
+    n.append(t, el("span", [b.label, v.clean_snapshot ? "clean: " + v.clean_snapshot : "no clean snapshot yet"].join(" · "), "muted"));
+    box.append(n);
+    const tr = document.createElement("tr");
+    const size = (v.cpus ? v.cpus + " vCPU · " : "") + (v.memory_mb ? GB(v.memory_mb) : "");
+    tr.append(el("td", v.active ? "◉" : "○"), el("td", v.name), el("td", String(b.label)), el("td", size || "—"),
+              el("td", v.clean_snapshot || "none yet"));
+    const act = el("td"), off = OFF.includes(v.state);
+    const btn = (label, id) => { const x = el("button", label, "b"); x.onclick = () => $(id).click(); return x; };
+    if (v.active) act.append(off ? btn("Start", "vm-start") : btn("Shut down", "vm-shutdown"), btn("Revert", "vm-revert"),
+                             btn("Make clean snapshot", "makeclean"));
+    tr.append(act); rows.append(tr);
+  }
+  const add = el("button", "+ Add test VM", "lnode add"); add.onclick = () => { $("laddnote").hidden = !$("laddnote").hidden; };
+  box.append(add);
+  $("lram").hidden = !m.host;
+  if (m.host) {
+    const used = m.host.total_mb - m.host.free_mb, size = m.vms[0] && m.vms[0].memory_mb;
+    $("lramtotal").textContent = "· " + GB(m.host.total_mb);
+    $("lmused").style.width = Math.min(100, Math.round(100 * used / m.host.total_mb)) + "%";
+    $("lramtext").textContent = "In use " + GB(used) + " · free " + GB(m.host.free_mb) +
+      (m.another_fits == null ? "" : m.another_fits ? " → another " + GB(size) + " test VM fits" : " → no room for another " + GB(size) + " test VM right now");
+  }
+}
+async function labMap() { try { labMapRender(await api("/api/labmap")); } catch (e) { say(e.message, e.detail); } }
+
+// ---- 0.37.0 Lab layout (T-19) --------------------------------------------------------
+// Values typed here go to the host, which checks them (settings.check_lab); results are FatBox's own text.
+let labView = null, labPick = "one-pc";
+const LAYOUT_NAMES = { "one-pc": "One PC", "two-pcs": "Two PCs", "two-vms": "Two VMs" };
+function labRender(v) {
+  labView = v; labPick = v.lab.layout;
+  $("lab-addr").value = v.lab.address; $("lab-login").value = v.lab.login; $("lab-port").value = v.lab.port;
+  labCards();
+  $("labpubwrap").hidden = !v.public_key;
+  $("labpub").value = v.public_key ? `powershell -ExecutionPolicy Bypass -File .\\lab-setup.ps1 -HostAddress THIS_PC_IP -Vm "${v.vm}" -GuestUser "${v.guest_user}" -GuestPython "${v.guest_python}" -PublicKey "${v.public_key}"` : "";
+  $("lab-pair").textContent = v.has_key ? "Show key again" : "Make key";
+  $("lab-pinned").textContent = v.lab.layout === "one-pc" ? "" : v.pinned ? "test PC key pinned" : "test PC key pinned on the first check";
+  const ul = $("labchecks"); ul.replaceChildren();
+  if (!v.checked) ul.append(el("li", "Not checked yet: click Test connection.", "muted"));
+  for (const r of v.results) ul.append(el("li", ({ ok: "✓ ", warn: "! ", bad: "✗ " }[r.status] || "") + r.text, r.status));
+}
+function labCards() {
+  for (const c of document.querySelectorAll("#labcards .labcard")) c.classList.toggle("on", c.dataset.layout === labPick);
+  $("labremote").hidden = labPick === "one-pc";
+}
+for (const c of document.querySelectorAll("#labcards .labcard[data-layout]")) c.onclick = () => { labPick = c.dataset.layout; labCards(); $("labmsg").textContent = "not saved yet"; };
+async function labLoad() { try { labRender(await api("/api/lab")); } catch (e) { say(e.message, e.detail); } }
+async function labDo(path, body, busy) {
+  $("labmsg").textContent = busy || "";
+  try { labRender(await api(path, body)); $("labmsg").textContent = ""; } catch (e) { $("labmsg").textContent = ""; say(e.message, e.detail); }
+  vm();
+}
+$("lab-save").onclick = () => labDo("/api/lab/save", { lab: { layout: labPick, address: labPick === "one-pc" ? "" : $("lab-addr").value.trim(),
+  login: labPick === "one-pc" ? "" : $("lab-login").value.trim(), port: Number($("lab-port").value) || 22 } }, "saving…");
+$("lab-pair").onclick = () => labDo("/api/lab/pair", {}, "making the key…");
+$("lab-check").onclick = () => labDo("/api/lab/check", {}, "checking (up to 40 s)…");
+$("lab-forget").onclick = () => { if (confirm("Forget the test PC's SSH key?\n\nOnly do this after reinstalling the test PC. The next check pins whatever key answers at that address: compare its fingerprint with what lab-setup.ps1 printed.")) labDo("/api/lab/forget-key", { confirm: true }); };
+$("lablabel").onclick = () => { showTab("settings"); prefs(); labLoad(); };
+function labLabel(l) {
+  if (!l) return;
+  const where = LAYOUT_NAMES[l.layout] + (l.layout === "one-pc" ? "" : ` · ${l.address}`);
+  $("lablabel").textContent = l.problem ? `Lab: ${where} · check failed` : `Lab: ${where}`;
+  $("lablabel").classList.toggle("bad", !!l.problem);
+  $("lablabel").title = l.problem ? `${l.problem} (Settings → Lab layout)` : "Lab layout: where the test VM runs. Click to open Settings";
+}
+
+// ---- 0.23.0 Settings ------------------------------------------------------------
+// Host-side values only (no VM data here). The server checks every value again, and so does the VM.
+let prefsView = null;
+const names = t => t.split(",").map(x => x.trim()).filter(Boolean);
+function fillPrefs(p, fetchToo) {
+  prefsView = p;
+  const f = p.fetch, fl = p.filters, a = p.analysis, b = p.big;
+  $("s-limiton").checked = f.size_limit; $("s-maxmb").value = f.max_size_mb;
+  $("s-budget").value = f.budget; $("s-maxmb").disabled = !f.size_limit;
+  for (const c of document.querySelectorAll("#s-types input")) c.checked = fl.types.includes(c.value);
+  $("s-tags").value = fl.tags.join(", "); $("s-skipfam").value = fl.skip_families.join(", "); $("s-minkb").value = fl.min_size_kb;
+  $("s-sample").value = a.sample_time_s; $("s-capa").value = a.capa_time_s; $("s-par").value = String(a.parallel);
+  $("s-capapacked").value = a.capa_packed; $("s-cap").value = String(b.unpack_limit_mb); $("s-toobig").value = b.too_big;
+  fromChips(); renderCandidates();
+}
+// 0.33.0: what Settings will apply, folded into the "Fetch rules" button: a short summary on the button and the
+// full list on mouse over (text nodes only)
+function fromChips() {
+  if (!prefsView) return;
+  const f = prefsView.fetch, fl = prefsView.filters, b = prefsView.big, ar = snapView && snapView.auto_revert;
+  const rows = [["File types", fl.types.join(", ") || "none"],
+                ["Download limit", f.size_limit ? `≤ ${f.max_size_mb} MB` : "no limit"], ["Time budget", `${f.budget} s`]];
+  if (fl.tags.length) rows.push(["Only tags", fl.tags.join(", ")]);
+  if (fl.skip_families.length) rows.push(["Never families", fl.skip_families.join(", ")]);
+  if (fl.min_size_kb) rows.push(["Smallest file", `≥ ${fl.min_size_kb} KB`]);
+  rows.push(["Unpack limit", `≤ ${b.unpack_limit_mb} MB` + (b.too_big === "info" ? " · keep info" : "")]);
+  rows.push(["Auto-revert", ar ? "ON" : "off"]);
+  $("rulesrows").replaceChildren(...rows.map(([k, v]) => {
+    const r = el("div", null, "r");
+    r.append(el("span", k), el("span", v, k === "Auto-revert" && ar ? "on" : null)); return r;
+  }));
+  $("rulessum").textContent = ` · ${rows[0][1]} · ${rows[1][1]}` + (rows.length > 2 ? ` +${rows.length - 2}` : "");
+}
+$("tosettings").onclick = $("rulesbtn").onclick = () => { showTab("settings"); prefs(); labLoad(); };
+async function prefs(fetchToo) {
+  try { const j = await api("/api/prefs"); for (const n of j.notes || []) $("log").append("--- " + n + "\n"); fillPrefs(j.prefs, fetchToo); }
+  catch (e) { say(e.message, e.detail); }
+}
+function readPrefs() {
+  return {
+    // max and small_first only matter to the command line fetch now (0.29.0): kept as they were
+    fetch: { max: prefsView.fetch.max, size_limit: $("s-limiton").checked, max_size_mb: $("s-maxmb").value,
+             budget: $("s-budget").value, small_first: prefsView.fetch.small_first },
+    filters: { types: [...document.querySelectorAll("#s-types input")].filter(c => c.checked).map(c => c.value),
+               tags: names($("s-tags").value), skip_families: names($("s-skipfam").value), min_size_kb: $("s-minkb").value },
+    analysis: { sample_time_s: $("s-sample").value, capa_time_s: $("s-capa").value, parallel: $("s-par").value, capa_packed: $("s-capapacked").value },
+    big: { unpack_limit_mb: $("s-cap").value, too_big: $("s-toobig").value },
+  };
+}
+$("s-limiton").onchange = () => { $("s-maxmb").disabled = !$("s-limiton").checked; };
+$("s-save").onclick = async () => {
+  try { const j = await api("/api/prefs", { prefs: readPrefs() }); fillPrefs(j.prefs, true); $("setmsg").textContent = "Saved."; say(""); }
+  catch (e) { $("setmsg").textContent = ""; say(e.message, e.detail); }
+};
+$("s-reset").onclick = async () => {
+  if (!confirm("Reset every setting to its default?")) return;
+  try { const j = await api("/api/prefs", { reset: true }); fillPrefs(j.prefs, true); $("setmsg").textContent = "Defaults restored."; }
+  catch (e) { say(e.message, e.detail); }
+};
+$("vm-update").onclick = $("ver-update").onclick = () => startJob("/api/update-vm", {});
+function modeChanged() {
+  const needs = ["tag", "signature", "file_type"].includes($("mode").value);
+  $("value").disabled = $("value").hidden = !needs;  // 0.33.0: the box shows only for tag, family and file type
+  $("value").placeholder = needs ? { tag: "tag, e.g. ransomware", signature: "family, e.g. AgentTesla", file_type: "type, e.g. exe" }[$("mode").value]
+                                 : "not used in this mode";
+  if (!needs) $("value").value = "";
+}
+$("mode").onchange = modeChanged; modeChanged();
+$("cancel").onclick = () => api("/api/cancel", {}).catch(e => say(e.message, e.detail));
+$("refresh").onclick = refresh;
+// 0.22.0: white mode and the log panel, remembered in this browser only (no server state)
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $("theme-icon").setAttribute("href", t === "light" ? "#i-moon" : "#i-sun");
+  $("theme").title = t === "light" ? "Dark mode" : "White mode";
+}
+setTheme(store("fbx-theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+$("theme").onclick = () => { const t = document.documentElement.dataset.theme === "light" ? "dark" : "light"; setTheme(t); store("fbx-theme", t); };
+// 0.43.0: art. The wait screen covers the tabs (never the header buttons) while Windows boots; Hide keeps it
+// away until the next start. Its words are FatBox's own; only the VM name comes from the host, as text
+let waitHidden = false, waitKey = "";
+function waitScreen(j) {
+  const key = j && j.badge ? j.badge.key : "", on = ["booting", "start"].includes(key);
+  if (on && !["booting", "start"].includes(waitKey)) waitHidden = false;  // a new start shows it again
+  waitKey = key;
+  if (on && j && j.vm) $("waitname").textContent = "Waiting for " + j.vm;
+  const show = on && !waitHidden;
+  if (show && $("wait").hidden) $("content").scrollTop = 0;
+  $("wait").hidden = !show;
+}
+$("waithide").onclick = () => { waitHidden = true; $("wait").hidden = true; };
+function setAmbient(on) { $("layout").classList.toggle("amb", on); $("ambient").checked = on; store("fbx-ambient", on ? "1" : "0"); }
+setAmbient(store("fbx-ambient") !== "0");
+$("ambient").onchange = () => setAmbient($("ambient").checked);
+function showLog(on) { $("side").hidden = !on; $("logshow").hidden = on; store("fbx-log", on ? "1" : "0"); }
+showLog(store("fbx-log") !== "0");
+$("loghide").onclick = () => showLog(false);
+$("logshow").onclick = () => showLog(true);
+$("dclose").onclick = () => $("dlg").close();
+setView(store("fbx-view") === "lib" ? "lib" : "new");
+vm(); labMap(); version(); library(); snapshots(); prefs(true); poll().then(() => { if (fetchRunning) polling = setInterval(poll, 1500); });
+setInterval(vm, 15000);
+</script>
+</body>
+</html>

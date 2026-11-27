@@ -1,0 +1,30 @@
+# --- never commit: local config, keys, samples, analysis output ---
+config.toml
+.env
+*.key
+secrets*
+data/
+reports/
+vault/
+*.quarantine
+*.zip
+*.7z
+*.db
+*.evtx
+*.pcap
+*.pml
+
+# --- python / tooling ---
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# --- host and lab secrets (0.39.3) ---
+host.toml
+*.pw
+lab_key*
+lab_known_hosts
+lab.json
+fatbox_gate.toml
+gate.log

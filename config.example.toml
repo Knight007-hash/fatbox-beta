@@ -1,0 +1,51 @@
+# Copy to config.toml. Put API keys in env vars (MB_API_KEY, MALSHARE_API_KEY), not in this file.
+
+[paths]
+data_dir = "./data"          # vault/, reports/, index.db
+yara_dir = "./rules/yara"
+capa_dir = "./rules/capa"    # capa rules + library signatures (pinned, come with Update VM)
+
+[vault]
+zip_password = "infected"    # must stay "infected": MalwareBazaar zips are stored as-is
+# Unpacking always stops at 100 MB at most (zip-bomb guard, fixed in code). unpack_limit_mb can set it LOWER.
+# The host GUI's Settings tab sends its own values with each fetch/triage; these are the console defaults.
+
+[fetch]
+sources = ["bazaar"]         # run order; add "malshare" once you have its key
+download_limit_mb = 5        # skip samples bigger than this, 1..100 (slow link). Old name: [vault] max_sample_mb
+download_limit_on = true     # false: no download limit (still stops at the 100 MB unpacked cap)
+budget_s = 400               # ONE time budget for the whole fetch, all samples together, 60..1800 s
+unpack_limit_mb = 100        # zip-bomb guard: 25 | 50 | 100 (never higher, never off)
+too_big = "skip"             # a sample past it: "skip", or "info" = keep a metadata row only (the file is never kept)
+
+[triage]
+sample_time_s = 60           # time limit per sample, 10..300 s; past it the analysis is stopped and marked "timeout"
+capa_time_s = 120            # extra time for code analysis (capa), 30..600 s; past it only capa stops ("capa: timeout")
+parallel = 0                 # samples analysed at the same time, 1..10; 0 = auto (one per CPU, as far as free RAM
+#                              allows). Each uses ~1 CPU + ~1.1 GB. More than the CPUs works but is not faster:
+#                              they share the CPUs and every time limit is stretched (at most 3x)
+capa_lib_skip = true         # skip emulation of library code capa ignores anyway (faster on Visual C++ programs;
+#                              `python -m fatbox capa-compare` showed identical findings). false = full emulation
+capa_packed = "skip"         # capa on packed native programs: "skip" (it would only see the unpacking stub) | "run"
+
+[filters]                    # applied to every source
+file_types = ["exe", "dll"]  # checked on metadata AND on the real bytes after download; [] = any
+tags_any = []                # MalwareBazaar tags, e.g. ["ransomware", "stealer"]; [] = any
+signatures_any = []          # family names, e.g. ["AgentTesla", "Formbook"]; [] = any
+signatures_none = []         # never these families, e.g. ["Mirai", "Gafgyt"]
+min_size_kb = 0              # skip candidates smaller than this, 0..10240 KB; 0 = no minimum
+max_per_run = 20             # samples stored per source per run, 1..30
+max_attempts = 100           # downloads tried per source per run (protects quotas)
+delay_seconds = 2.0          # pause between downloads
+small_first = false          # slow link: try smallest candidates first (CLI: --small-first)
+download_timeout = 300       # per-sample ceiling (s); the shared budget_s and the 45 s stall rule usually end it first
+
+[bazaar]
+api_key = ""                 # prefer env MB_API_KEY
+mode = "recent"              # recent (last 60 min) | latest (newest 100) | tag | signature | file_type
+query_value = ""             # value for tag / signature / file_type modes
+limit = 100                  # list size for tag / signature / file_type (max 1000)
+
+[malshare]
+api_key = ""                 # prefer env MALSHARE_API_KEY
+type_filter = ""             # e.g. "PE32" (list names: python -m fatbox sources --malshare-types)

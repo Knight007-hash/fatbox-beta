@@ -1,0 +1,19 @@
+# The libraries FatBox uses, by name only. Edit THIS file, never requirements.txt by hand.
+# Then regenerate the pinned list (exact versions + hashes, nothing younger than 7 days):
+#   python -m pip install pip-tools==7.6.2
+#   python scripts/pin_deps.py
+requests
+pyzipper
+pefile
+yara-python
+# T-9 File Analysis: the Detect It Easy engine with its signature database (works on any 64-bit Windows)
+# Pinned to 0.4.0 on purpose: 0.5.0's Windows "cp313" wheel holds a module built for Python 3.14, which the VM's
+# Python 3.13 can't load (scripts/check_deps.py --wheels catches this). Move up when a fixed release is out.
+die-python==0.4.0
+# T-9: Authenticode signature check from memory (signer, valid or not); offline, bundled trust store
+signify
+# T-14 Code Analysis: capa (Mandiant, Apache-2.0) finds what the code does (vivisect + dnfile, from memory).
+# Its rules and library signatures are NOT in this package: they are vendored in rules/capa/ (pinned).
+flare-capa==10.0.0
+# click (pulled in by capa) needs colorama on Windows only; pin_deps runs on Linux and would leave it out
+colorama
